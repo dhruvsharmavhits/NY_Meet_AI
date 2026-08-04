@@ -92,10 +92,15 @@ class StreamingSession:
         # doesn't drop audio. Only sustained silence
         # (ENDPOINT_SILENCE_FRAMES) actually ends the utterance.
         self._utterance.extend(frame_bytes)
-        self._frames_since_partial += 1
+        if is_speech:
+            self._frames_since_partial += 1
         self._silence_frames = 0 if is_speech else self._silence_frames + 1
 
-        if self._frames_since_partial >= PARTIAL_INTERVAL_FRAMES:
+        frame_count = len(self._utterance) // FRAME_BYTES
+        if (
+            self._frames_since_partial >= PARTIAL_INTERVAL_FRAMES
+            and frame_count < 150  # about 4.5 seconds
+        ):
             self._frames_since_partial = 0
             events.append(SpeechEvent(kind="partial", audio=bytes(self._utterance)))
 

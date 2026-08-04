@@ -15,3 +15,4 @@ storage/exports/*
 !storage/**/.gitkeep
 .DS_Store
 .antigravity
+NY_Meet_backend.zip

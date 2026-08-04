@@ -6,6 +6,7 @@ pydantic-settings==2.5.2
 python-multipart==0.0.9
 python-socketio==5.11.4
 alembic==1.13.2
+requests==2.32.3
 faster-whisper==1.2.1
 ctranslate2==4.8.1
 webrtcvad==2.0.10

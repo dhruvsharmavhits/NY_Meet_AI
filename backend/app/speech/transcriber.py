@@ -22,11 +22,38 @@ clipped words.
 import re
 
 import numpy as np
+import requests
 from faster_whisper import WhisperModel
 
 from app.config import settings
 
 _models: dict[str, WhisperModel] = {}
+
+
+def _deepgram_transcribe(audio_bytes: bytes, language: str | None) -> tuple[str, str] | None:
+    try:
+        resp = requests.post(
+            "https://api.deepgram.com/v1/listen",
+            params={
+                "model": "nova-2",
+                "language": language or "en",
+                "smart_format": "true",
+                "encoding": "linear16",
+                "sample_rate": "16000",
+                "channels": "1",
+            },
+            headers={
+                "Authorization": f"Token {settings.deepgram_api_key}",
+                "Content-Type": "audio/raw",
+            },
+            data=audio_bytes,
+            timeout=10,
+        )
+        resp.raise_for_status()
+        alt = resp.json()["results"]["channels"][0]["alternatives"][0]
+        return alt["transcript"].strip(), language or "en"
+    except Exception:
+        return None
 
 # Biases decoding context toward the languages we actually support — cheap
 # (a handful of extra prompt tokens), no extra model, no extra load.
@@ -44,6 +71,7 @@ _LATIN_RANGE = (0x0041, 0x024F)
 
 def _dominant_script(text: str) -> str:
     counts = {"gujarati": 0, "devanagari": 0, "bengali": 0, "latin": 0, "other": 0}
+    print(counts)
     for ch in text:
         cp = ord(ch)
         if _GUJARATI_RANGE[0] <= cp <= _GUJARATI_RANGE[1]:
@@ -92,7 +120,7 @@ def is_hallucination(text: str, expected_language: str | None = None) -> bool:
 
 # RMS (on a 0-1 normalized float32 waveform) below this is treated as
 # silence/background noise and never sent to Whisper at all.
-MIN_RMS_ENERGY = 0.006
+MIN_RMS_ENERGY = 0.012
 
 # Segments Whisper isn't actually confident about (common on noisy or
 # clipped audio) are dropped rather than shown as a caption.
@@ -149,6 +177,12 @@ def transcribe_partial(audio_bytes: bytes, language: str | None = "en") -> tuple
     if audio is None:
         return "", ""
 
+    if settings.deepgram_api_key:
+        result = _deepgram_transcribe(audio_bytes, language)
+        if result is not None:
+            text, detected_lang = result
+            return ("", "") if is_hallucination(text, expected_language=detected_lang) else (text, detected_lang)
+
     segments, info = _get_model(settings.whisper_partial_model_size).transcribe(
         audio,
         language=language,
@@ -167,6 +201,7 @@ def transcribe_partial(audio_bytes: bytes, language: str | None = "en") -> tuple
     detected_lang = language or info.language
     if is_hallucination(text, expected_language=detected_lang):
         return "", ""
+    print(text)
     return text, detected_lang
 
 
@@ -185,17 +220,23 @@ def transcribe_final(
     if audio is None:
         return "", ""
 
+    if settings.deepgram_api_key:
+        result = _deepgram_transcribe(audio_bytes, language)
+        if result is not None:
+            text, detected_lang = result
+            return ("", "") if is_hallucination(text, expected_language=detected_lang) else (text, detected_lang)
+
     segments, info = _get_model(settings.whisper_model_size).transcribe(
         audio,
         language=language,
-        beam_size=5,
-        best_of=5,
+        beam_size=2,
+        best_of=2,
         patience=1.0,
-        temperature=(0.0, 0.2),              # shorter fallback ladder — fewer retries = lower worst-case latency
+        temperature=0.0,              # shorter fallback ladder — fewer retries = lower worst-case latency
         vad_filter=False,
         condition_on_previous_text=False,
         initial_prompt=initial_prompt or WHISPER_PROMPT,
-        no_speech_threshold=0.5,
+        no_speech_threshold=0.7,
         compression_ratio_threshold=COMPRESSION_RATIO_THRESHOLD,
         log_prob_threshold=MIN_AVG_LOGPROB,
         word_timestamps=True,
@@ -205,6 +246,7 @@ def transcribe_final(
     detected_lang = language or info.language
     if is_hallucination(text, expected_language=detected_lang):
         return "", ""
+    print(text)
     return text, detected_lang
 
 
