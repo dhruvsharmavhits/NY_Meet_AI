@@ -58,7 +58,7 @@ export function VideoTile({ stream, label, muted, mirrored, micMuted, cameraOff 
           autoPlay
           playsInline
           muted={muted}
-          className={`h-full w-full object-cover ${mirrored ? "-scale-x-100" : ""}`}
+          className={`h-full w-full object-contain ${mirrored ? "-scale-x-100" : ""}`}
         />
       ) : (
         <div className="flex h-full w-full items-center justify-center" style={{ background: `linear-gradient(135deg, ${avatarColor}22 0%, ${avatarColor}11 100%)` }}>

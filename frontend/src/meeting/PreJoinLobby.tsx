@@ -77,7 +77,7 @@ export function PreJoinLobby({ meetingTitle, roomCode, defaultName, defaultCapti
                 autoPlay
                 playsInline
                 muted
-                className="absolute inset-0 h-full w-full -scale-x-100 object-cover"
+                className="absolute inset-0 h-full w-full -scale-x-100 object-contain"
               />
             ) : (
               <div
