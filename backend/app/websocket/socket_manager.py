@@ -57,18 +57,74 @@ async def join_room(sid, data):
     session = await sio.get_session(sid)
     participants = rooms.setdefault(room_code, {})
 
+    mic_on = data.get("mic_on", True)
+    camera_on = data.get("camera_on", True)
+
     existing = [
-        {"sid": psid, "user_id": p["user_id"], "full_name": p["full_name"]}
+        {
+            "sid": psid,
+            "user_id": p["user_id"],
+            "full_name": p["full_name"],
+            "mic_on": p.get("mic_on", True),
+            "camera_on": p.get("camera_on", True),
+            "screen_sharing": p.get("screen_sharing", False),
+        }
         for psid, p in participants.items()
     ]
 
-    participants[sid] = {"user_id": session["user_id"], "full_name": session["full_name"]}
+    participants[sid] = {
+        "user_id": session["user_id"],
+        "full_name": session["full_name"],
+        "mic_on": mic_on,
+        "camera_on": camera_on,
+        "screen_sharing": False,
+    }
     await sio.enter_room(sid, room_code)
 
     await sio.emit("existing-peers", {"peers": existing}, room=sid)
     await sio.emit(
         "peer-joined",
-        {"sid": sid, "user_id": session["user_id"], "full_name": session["full_name"]},
+        {
+            "sid": sid,
+            "user_id": session["user_id"],
+            "full_name": session["full_name"],
+            "mic_on": mic_on,
+            "camera_on": camera_on,
+            "screen_sharing": False,
+        },
+        room=room_code,
+        skip_sid=sid,
+    )
+
+
+@sio.on("media-state")
+async def media_state(sid, data):
+    room_code = data["room_code"]
+    participants = rooms.get(room_code, {})
+    print(f"[media-debug] received from sid={sid} room={room_code} data={data} in_room={sid in participants} roster={list(participants.keys())}", flush=True)
+    if sid not in participants:
+        return
+    participants[sid]["mic_on"] = data.get("mic_on", True)
+    participants[sid]["camera_on"] = data.get("camera_on", True)
+    print(f"[media-debug] broadcasting sid={sid} to room={room_code} skip_sid={sid} recipients={[s for s in participants if s != sid]}", flush=True)
+    await sio.emit(
+        "media-state",
+        {"sid": sid, "mic_on": participants[sid]["mic_on"], "camera_on": participants[sid]["camera_on"]},
+        room=room_code,
+        skip_sid=sid,
+    )
+
+
+@sio.on("screen-share-state")
+async def screen_share_state(sid, data):
+    room_code = data["room_code"]
+    participants = rooms.get(room_code, {})
+    if sid not in participants:
+        return
+    participants[sid]["screen_sharing"] = data.get("sharing", False)
+    await sio.emit(
+        "screen-share-state",
+        {"sid": sid, "sharing": participants[sid]["screen_sharing"]},
         room=room_code,
         skip_sid=sid,
     )

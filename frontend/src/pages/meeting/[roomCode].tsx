@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { fetchMySettings, getMeeting, joinMeeting, leaveMeeting, updateMySettings, updateProfile, uploadRecording } from "@/services/api";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -37,6 +37,7 @@ export default function MeetingRoomPage() {
   const roomCode = typeof router.query.roomCode === "string" ? router.query.roomCode : undefined;
   const { user, loading: userLoading, register } = useCurrentUser();
   const setUser = useAuthStore((s) => s.setUser);
+  const queryClient = useQueryClient();
 
   const [phase, setPhase] = useState<"lobby" | "call">("lobby");
   const [displayName, setDisplayName] = useState("");
@@ -83,6 +84,7 @@ export default function MeetingRoomPage() {
 
   const {
     localStream,
+    screenStream,
     remoteStreams,
     participants,
     messages,
@@ -119,7 +121,12 @@ export default function MeetingRoomPage() {
     }
     if (user && captionLanguage !== mySettings?.caption_language) {
       try {
-        await updateMySettings({ caption_language: captionLanguage });
+        const updatedSettings = await updateMySettings({ caption_language: captionLanguage });
+        // The lobby's own PUT bypasses react-query's cache, so without this
+        // the CaptionOverlay below keeps reading the stale cached language
+        // for the rest of the call (it only picks up the change on the next
+        // fetch, e.g. after visiting /settings and coming back).
+        queryClient.setQueryData(["my-settings"], updatedSettings);
       } catch {
         // best-effort — worst case the backend keeps using the previously saved language
       }
@@ -277,9 +284,11 @@ export default function MeetingRoomPage() {
         {/* Video grid */}
         <VideoGrid
           localStream={localStream}
+          screenStream={screenStream}
           localName={displayName || "You"}
           micOn={micOn}
           cameraOn={cameraOn}
+          screenSharing={screenSharing}
           remoteStreams={remoteStreams}
           participants={participants}
         />
@@ -300,6 +309,8 @@ export default function MeetingRoomPage() {
         {participantsOpen && (
           <ParticipantsPanel
             localName={displayName || "You"}
+            localMicOn={micOn}
+            localCameraOn={cameraOn}
             participants={participants}
             onClose={() => setParticipantsOpen(false)}
           />

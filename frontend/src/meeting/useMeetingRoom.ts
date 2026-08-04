@@ -4,7 +4,19 @@ import { startAudioCapture } from "@/meeting/audioCapture";
 import type { Caption, ChatMessage, Participant } from "@/meeting/types";
 
 const ICE_SERVERS: RTCConfiguration = {
-  iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
+    {
+      urls: "turn:openrelay.metered.ca:80",
+      username: "openrelayproject",
+      credential: "openrelayproject",
+    },
+    {
+      urls: "turn:openrelay.metered.ca:443",
+      username: "openrelayproject",
+      credential: "openrelayproject",
+    },
+  ],
 };
 
 interface UseMeetingRoomOptions {
@@ -24,6 +36,7 @@ export function useMeetingRoom({
   initialCameraOn,
 }: UseMeetingRoomOptions) {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<Record<string, MediaStream>>({});
   const [participants, setParticipants] = useState<Record<string, Participant>>({});
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -37,35 +50,101 @@ export function useMeetingRoom({
   const [error, setError] = useState<string | null>(null);
 
   const peerConnections = useRef<Record<string, RTCPeerConnection>>({});
+  const videoSendersRef = useRef<Record<string, RTCRtpSender>>({});
+  const audioSendersRef = useRef<Record<string, RTCRtpSender>>({});
+  const outgoingStreamRef = useRef<MediaStream | null>(null);
+  if (outgoingStreamRef.current === null && typeof window !== "undefined") {
+    outgoingStreamRef.current = new MediaStream();
+  }
+  const remoteMediaStreamsRef = useRef<Record<string, MediaStream>>({});
   const localStreamRef = useRef<MediaStream | null>(null);
   const cameraTrackRef = useRef<MediaStreamTrack | null>(null);
+  const screenTrackRef = useRef<MediaStreamTrack | null>(null);
+  const screenSharingRef = useRef(false);
+  const micOnRef = useRef(initialMicOn);
+  const cameraOnRef = useRef(initialCameraOn);
   const stopAudioCaptureRef = useRef<(() => void) | null>(null);
   const everConnectedRef = useRef(false);
 
   const createPeerConnection = useCallback((sid: string) => {
     const pc = new RTCPeerConnection(ICE_SERVERS);
 
-    localStreamRef.current?.getTracks().forEach((track) => {
-      pc.addTrack(track, localStreamRef.current as MediaStream);
-    });
-
     pc.onicecandidate = (event) => {
       if (event.candidate) {
         getSocket().emit("signal", { to: sid, type: "ice-candidate", payload: event.candidate });
       }
     };
-
     pc.ontrack = (event) => {
-      setRemoteStreams((prev) => ({ ...prev, [sid]: event.streams[0] }));
+      // Don't rely on event.streams[0] — whether it's populated depends on
+      // both sides correctly negotiating an msid/stream grouping, which the
+      // answerer's reused (auto-created-by-setRemoteDescription) transceiver
+      // does not do by default, leaving it empty. Build our own per-peer
+      // MediaStream from whatever tracks arrive instead — robust regardless
+      // of msid negotiation.
+      let stream = remoteMediaStreamsRef.current[sid];
+      if (!stream) {
+        stream = new MediaStream();
+        remoteMediaStreamsRef.current[sid] = stream;
+      }
+      if (!stream.getTracks().includes(event.track)) {
+        stream.addTrack(event.track);
+      }
+      setRemoteStreams((prev) => ({ ...prev, [sid]: stream }));
     };
 
     peerConnections.current[sid] = pc;
     return pc;
   }, []);
 
+  // As the OFFERER (we're initiating this connection, before any remote
+  // description exists), we must create our own audio/video transceivers —
+  // there's nothing yet for us to reuse.
+  const attachOutgoingTracksAsOfferer = useCallback((sid: string, pc: RTCPeerConnection) => {
+    const audioTrack = localStreamRef.current?.getAudioTracks()[0] ?? null;
+    const videoTrack = screenSharingRef.current ? screenTrackRef.current : cameraTrackRef.current;
+    const streams = outgoingStreamRef.current ? [outgoingStreamRef.current] : undefined;
+
+    const audioTransceiver = pc.addTransceiver(audioTrack ?? "audio", { direction: "sendrecv", streams });
+    audioSendersRef.current[sid] = audioTransceiver.sender;
+
+    const videoTransceiver = pc.addTransceiver(videoTrack ?? "video", { direction: "sendrecv", streams });
+    videoSendersRef.current[sid] = videoTransceiver.sender;
+  }, []);
+
+  // As the ANSWERER, setRemoteDescription(offer) auto-creates a local
+  // transceiver per incoming m-line (recvonly by default, no track). Reuse
+  // those — do NOT pre-create our own transceivers via addTransceiver()
+  // before setRemoteDescription(): Chromium does not match/reuse them against
+  // the incoming offer, so they end up orphaned (mid stays null) while a
+  // fresh recvonly-only transceiver handles the real connection — silently
+  // dropping our outgoing audio/video to this peer from the very start.
+  const attachOutgoingTracksAsAnswerer = useCallback((sid: string, pc: RTCPeerConnection) => {
+    const audioTrack = localStreamRef.current?.getAudioTracks()[0] ?? null;
+    const videoTrack = screenSharingRef.current ? screenTrackRef.current : cameraTrackRef.current;
+
+    const audioTransceiver = pc.getTransceivers().find((t) => t.receiver.track?.kind === "audio");
+    if (audioTransceiver) {
+      audioTransceiver.direction = "sendrecv";
+      audioTransceiver.sender.setStreams?.(outgoingStreamRef.current ?? new MediaStream());
+      if (audioTrack) audioTransceiver.sender.replaceTrack(audioTrack).catch(() => {});
+      audioSendersRef.current[sid] = audioTransceiver.sender;
+    }
+
+    const videoTransceiver = pc.getTransceivers().find((t) => t.receiver.track?.kind === "video");
+    if (videoTransceiver) {
+      videoTransceiver.direction = "sendrecv";
+      videoTransceiver.sender.setStreams?.(outgoingStreamRef.current ?? new MediaStream());
+      if (videoTrack) videoTransceiver.sender.replaceTrack(videoTrack).catch(() => {});
+      videoSendersRef.current[sid] = videoTransceiver.sender;
+    }
+  }, []);
+
   const closePeerConnection = useCallback((sid: string) => {
     peerConnections.current[sid]?.close();
     delete peerConnections.current[sid];
+    delete videoSendersRef.current[sid];
+    delete audioSendersRef.current[sid];
+    delete remoteMediaStreamsRef.current[sid];
     setRemoteStreams((prev) => {
       const next = { ...prev };
       delete next[sid];
@@ -90,7 +169,10 @@ export function useMeetingRoom({
 
     async function start() {
       if (cancelled) return;
-
+      micOnRef.current = initialMicOn;
+      cameraOnRef.current = initialCameraOn;
+      setMicOn(initialMicOn);
+      setCameraOn(initialCameraOn);
       if (stream) {
         localStreamRef.current = stream;
         cameraTrackRef.current = stream.getVideoTracks()[0] ?? null;
@@ -104,7 +186,11 @@ export function useMeetingRoom({
         setConnected(true);
         setReconnecting(false);
         everConnectedRef.current = true;
-        socket.emit("join-room", { room_code: activeRoomCode });
+        socket.emit("join-room", {
+          room_code: activeRoomCode,
+          mic_on: micOnRef.current,
+          camera_on: cameraOnRef.current,
+        });
         if (stream) {
           stopAudioCaptureRef.current?.();
           stopAudioCaptureRef.current = startAudioCapture(stream, activeRoomCode, socket);
@@ -124,6 +210,9 @@ export function useMeetingRoom({
         if (everConnectedRef.current) setReconnecting(true);
         Object.keys(peerConnections.current).forEach((sid) => peerConnections.current[sid].close());
         peerConnections.current = {};
+        videoSendersRef.current = {};
+        audioSendersRef.current = {};
+        remoteMediaStreamsRef.current = {};
         setRemoteStreams({});
         setParticipants({});
         // socket.io-client auto-reconnects; on reconnect the "connect" handler
@@ -132,10 +221,23 @@ export function useMeetingRoom({
 
       socket.on(
         "existing-peers",
-        async (data: { peers: { sid: string; user_id: string; full_name: string }[] }) => {
+        async (data: {
+          peers: { sid: string; user_id: string; full_name: string; mic_on?: boolean; camera_on?: boolean; screen_sharing?: boolean }[];
+        }) => {
           for (const peer of data.peers) {
-            setParticipants((prev) => ({ ...prev, [peer.sid]: peer }));
+            setParticipants((prev) => ({
+              ...prev,
+              [peer.sid]: {
+                sid: peer.sid,
+                user_id: peer.user_id,
+                full_name: peer.full_name,
+                micOn: peer.mic_on ?? true,
+                cameraOn: peer.camera_on ?? true,
+                screenSharing: peer.screen_sharing ?? false,
+              },
+            }));
             const pc = createPeerConnection(peer.sid);
+            attachOutgoingTracksAsOfferer(peer.sid, pc);
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
             socket.emit("signal", { to: peer.sid, type: "offer", payload: pc.localDescription });
@@ -143,9 +245,22 @@ export function useMeetingRoom({
         }
       );
 
-      socket.on("peer-joined", (peer: Participant) => {
-        setParticipants((prev) => ({ ...prev, [peer.sid]: peer }));
-      });
+      socket.on(
+        "peer-joined",
+        (peer: { sid: string; user_id: string; full_name: string; mic_on?: boolean; camera_on?: boolean; screen_sharing?: boolean }) => {
+          setParticipants((prev) => ({
+            ...prev,
+            [peer.sid]: {
+              sid: peer.sid,
+              user_id: peer.user_id,
+              full_name: peer.full_name,
+              micOn: peer.mic_on ?? true,
+              cameraOn: peer.camera_on ?? true,
+              screenSharing: peer.screen_sharing ?? false,
+            },
+          }));
+        }
+      );
 
       socket.on(
         "signal",
@@ -155,6 +270,7 @@ export function useMeetingRoom({
           if (type === "offer") {
             const pc = peerConnections.current[from] ?? createPeerConnection(from);
             await pc.setRemoteDescription(new RTCSessionDescription(payload as RTCSessionDescriptionInit));
+            attachOutgoingTracksAsAnswerer(from, pc);
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
             socket.emit("signal", { to: from, type: "answer", payload: pc.localDescription });
@@ -188,6 +304,22 @@ export function useMeetingRoom({
       socket.on("partial-transcript", (data: { sid: string; text: string }) => {
         setPartialCaptions((prev) => ({ ...prev, [data.sid]: data.text }));
       });
+
+      socket.on("media-state", (data: { sid: string; mic_on: boolean; camera_on: boolean }) => {
+        setParticipants((prev) => {
+          const p = prev[data.sid];
+          if (!p) return prev;
+          return { ...prev, [data.sid]: { ...p, micOn: data.mic_on, cameraOn: data.camera_on } };
+        });
+      });
+
+      socket.on("screen-share-state", (data: { sid: string; sharing: boolean }) => {
+        setParticipants((prev) => {
+          const p = prev[data.sid];
+          if (!p) return prev;
+          return { ...prev, [data.sid]: { ...p, screenSharing: data.sharing } };
+        });
+      });
     }
 
     start();
@@ -206,6 +338,8 @@ export function useMeetingRoom({
       socket.off("chat-message");
       socket.off("caption");
       socket.off("partial-transcript");
+      socket.off("media-state");
+      socket.off("screen-share-state");
       disconnectSocket();
 
       stopAudioCaptureRef.current?.();
@@ -213,9 +347,18 @@ export function useMeetingRoom({
 
       Object.keys(peerConnections.current).forEach((sid) => peerConnections.current[sid].close());
       peerConnections.current = {};
+      videoSendersRef.current = {};
+      audioSendersRef.current = {};
+      remoteMediaStreamsRef.current = {};
+
+      screenTrackRef.current?.stop();
+      screenTrackRef.current = null;
+      screenSharingRef.current = false;
+      setScreenStream(null);
 
       localStreamRef.current?.getTracks().forEach((t) => t.stop());
       localStreamRef.current = null;
+      cameraTrackRef.current = null;
       setLocalStream(null);
       setRemoteStreams({});
       setParticipants({});
@@ -242,56 +385,126 @@ export function useMeetingRoom({
     const track = localStreamRef.current?.getAudioTracks()[0];
     if (track) {
       track.enabled = !track.enabled;
+      micOnRef.current = track.enabled;
       setMicOn(track.enabled);
+      if (roomCode) {
+        getSocket().emit("media-state", { room_code: roomCode, mic_on: track.enabled, camera_on: cameraOnRef.current });
+      }
     }
-  }, []);
+  }, [roomCode]);
 
-  const toggleCamera = useCallback(() => {
-    const track = localStreamRef.current?.getVideoTracks()[0];
-    if (track) {
-      track.enabled = !track.enabled;
-      setCameraOn(track.enabled);
-    }
-  }, []);
-
-  const toggleScreenShare = useCallback(async () => {
-    if (!localStreamRef.current) return;
-
-    if (!screenSharing) {
-      const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-      const screenTrack = screenStream.getVideoTracks()[0];
-
-      Object.values(peerConnections.current).forEach((pc) => {
-        const sender = pc.getSenders().find((s) => s.track?.kind === "video");
-        sender?.replaceTrack(screenTrack);
-      });
-
-      screenTrack.onended = () => {
-        const cameraTrack = cameraTrackRef.current;
-        if (cameraTrack) {
-          Object.values(peerConnections.current).forEach((pc) => {
-            const sender = pc.getSenders().find((s) => s.track?.kind === "video");
-            sender?.replaceTrack(cameraTrack);
-          });
+  const toggleCamera = useCallback(async () => {
+    // Turn camera OFF — stop the hardware track (release the camera light)
+    // and tell every connection to stop sending video, the same way the
+    // pre-join lobby's toggle behaves.
+    if (cameraOnRef.current) {
+      const track = localStreamRef.current?.getVideoTracks()[0];
+      if (track) {
+        track.stop();
+        localStreamRef.current?.removeTrack(track);
+        if (localStreamRef.current) {
+          setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
         }
-        setScreenSharing(false);
-      };
+      }
+      cameraTrackRef.current = null;
 
-      setScreenSharing(true);
-    } else {
-      const cameraTrack = cameraTrackRef.current;
-      if (cameraTrack) {
-        Object.values(peerConnections.current).forEach((pc) => {
-          const sender = pc.getSenders().find((s) => s.track?.kind === "video");
-          sender?.replaceTrack(cameraTrack);
+      if (!screenSharingRef.current) {
+        Object.values(videoSendersRef.current).forEach((sender) => {
+          sender.replaceTrack(null).catch(() => {});
         });
       }
-      setScreenSharing(false);
+
+      cameraOnRef.current = false;
+      setCameraOn(false);
+      if (roomCode) {
+        getSocket().emit("media-state", { room_code: roomCode, mic_on: micOnRef.current, camera_on: false });
+      }
+      return;
     }
-  }, [screenSharing]);
+
+    // Turn camera ON — (re)acquire the device and swap it into every
+    // connection via replaceTrack, no renegotiation needed since the video
+    // transceiver was created up front for every peer connection.
+    try {
+      const videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
+      const newTrack = videoStream.getVideoTracks()[0];
+      cameraTrackRef.current = newTrack;
+
+      if (localStreamRef.current) {
+        localStreamRef.current.addTrack(newTrack);
+        setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
+      } else {
+        const newStream = new MediaStream([newTrack]);
+        localStreamRef.current = newStream;
+        setLocalStream(newStream);
+      }
+
+      if (!screenSharingRef.current) {
+        Object.values(videoSendersRef.current).forEach((sender) => {
+          sender.replaceTrack(newTrack).catch(() => {});
+        });
+      }
+
+      cameraOnRef.current = true;
+      setCameraOn(true);
+      if (roomCode) {
+        getSocket().emit("media-state", { room_code: roomCode, mic_on: micOnRef.current, camera_on: true });
+      }
+    } catch (err) {
+      console.error("Unable to start camera", err);
+    }
+  }, [roomCode]);
+
+  const stopScreenShare = useCallback(() => {
+    screenTrackRef.current?.stop();
+    screenTrackRef.current = null;
+    screenSharingRef.current = false;
+    setScreenStream(null);
+
+    const cameraTrack = cameraTrackRef.current;
+    Object.values(videoSendersRef.current).forEach((sender) => {
+      sender.replaceTrack(cameraTrack ?? null).catch(() => {});
+    });
+
+    setScreenSharing(false);
+    if (roomCode) {
+      getSocket().emit("screen-share-state", { room_code: roomCode, sharing: false });
+    }
+  }, [roomCode]);
+
+  const toggleScreenShare = useCallback(async () => {
+    if (screenSharingRef.current) {
+      stopScreenShare();
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      const screenTrack = stream.getVideoTracks()[0];
+      screenTrackRef.current = screenTrack;
+      screenSharingRef.current = true;
+      setScreenStream(stream);
+
+      Object.values(videoSendersRef.current).forEach((sender) => {
+        sender.replaceTrack(screenTrack).catch(() => {});
+      });
+
+      // Fires when the browser's native "Stop sharing" control is used
+      // instead of our in-app toolbar button.
+      screenTrack.onended = () => stopScreenShare();
+
+      setScreenSharing(true);
+      if (roomCode) {
+        getSocket().emit("screen-share-state", { room_code: roomCode, sharing: true });
+      }
+    } catch {
+      // user cancelled the share picker — nothing to do
+    }
+  }, [roomCode, stopScreenShare]);
 
   return {
     localStream,
+    screenStream,
     remoteStreams,
     participants,
     messages,

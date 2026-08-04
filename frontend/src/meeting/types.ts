@@ -2,6 +2,9 @@ export interface Participant {
   sid: string;
   user_id: string;
   full_name: string;
+  micOn?: boolean;
+  cameraOn?: boolean;
+  screenSharing?: boolean;
 }
 
 export interface ChatMessage {

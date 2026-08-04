@@ -1,8 +1,10 @@
 import type { Participant } from "@/meeting/types";
-import { CloseIcon, MicIcon } from "@/components/Icons";
+import { CloseIcon, MicIcon, MicOffIcon, VideocamOffIcon } from "@/components/Icons";
 
 interface ParticipantsPanelProps {
   localName: string;
+  localMicOn?: boolean;
+  localCameraOn?: boolean;
   participants: Record<string, Participant>;
   onClose: () => void;
 }
@@ -26,7 +28,7 @@ function initialsFor(name: string): string {
   return ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "")).toUpperCase() || trimmed[0].toUpperCase();
 }
 
-export function ParticipantsPanel({ localName, participants, onClose }: ParticipantsPanelProps) {
+export function ParticipantsPanel({ localName, localMicOn = true, localCameraOn = true, participants, onClose }: ParticipantsPanelProps) {
   const list = Object.values(participants);
 
   return (
@@ -57,7 +59,12 @@ export function ParticipantsPanel({ localName, participants, onClose }: Particip
             {initialsFor(localName)}
           </div>
           <span className="flex-1 truncate text-sm font-medium text-white/80">{localName} (you)</span>
-          <MicIcon size={16} className="text-white/20" />
+          {!localCameraOn && <VideocamOffIcon size={16} className="text-white/30" />}
+          {localMicOn ? (
+            <MicIcon size={16} className="text-white/20" />
+          ) : (
+            <MicOffIcon size={16} className="text-[#ea4335]" />
+          )}
         </div>
 
         {/* Remote participants */}
@@ -73,7 +80,12 @@ export function ParticipantsPanel({ localName, participants, onClose }: Particip
               {initialsFor(p.full_name)}
             </div>
             <span className="flex-1 truncate text-sm font-medium text-white/80">{p.full_name}</span>
-            <MicIcon size={16} className="text-white/20" />
+            {p.cameraOn === false && <VideocamOffIcon size={16} className="text-white/30" />}
+            {p.micOn === false ? (
+              <MicOffIcon size={16} className="text-[#ea4335]" />
+            ) : (
+              <MicIcon size={16} className="text-white/20" />
+            )}
           </div>
         ))}
       </div>
