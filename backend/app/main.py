@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -13,12 +14,14 @@ from app.models import (  # noqa: F401 (registers models on Base)
     User,
     UserSettings,
 )
+from app.translation.translator import warmup as warmup_translator
 from app.users.router import router as users_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    asyncio.create_task(asyncio.to_thread(warmup_translator))
     yield
 
 

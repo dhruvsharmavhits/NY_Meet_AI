@@ -28,11 +28,12 @@ from faster_whisper import WhisperModel
 from app.config import settings
 
 _models: dict[str, WhisperModel] = {}
+_deepgram_session = requests.Session()
 
 
 def _deepgram_transcribe(audio_bytes: bytes, language: str | None) -> tuple[str, str] | None:
     try:
-        resp = requests.post(
+        resp = _deepgram_session.post(
             "https://api.deepgram.com/v1/listen",
             params={
                 "model": "nova-2",
@@ -71,7 +72,6 @@ _LATIN_RANGE = (0x0041, 0x024F)
 
 def _dominant_script(text: str) -> str:
     counts = {"gujarati": 0, "devanagari": 0, "bengali": 0, "latin": 0, "other": 0}
-    print(counts)
     for ch in text:
         cp = ord(ch)
         if _GUJARATI_RANGE[0] <= cp <= _GUJARATI_RANGE[1]:
@@ -165,7 +165,7 @@ def _prepare_audio(audio_bytes: bytes) -> np.ndarray | None:
     rms = float(np.sqrt(np.mean(np.square(audio)))) if audio.size else 0.0
     if rms < MIN_RMS_ENERGY:
         return None
-    return _normalize_peak(audio)
+    return audio
 
 
 def transcribe_partial(audio_bytes: bytes, language: str | None = "en") -> tuple[str, str]:
@@ -184,7 +184,7 @@ def transcribe_partial(audio_bytes: bytes, language: str | None = "en") -> tuple
             return ("", "") if is_hallucination(text, expected_language=detected_lang) else (text, detected_lang)
 
     segments, info = _get_model(settings.whisper_partial_model_size).transcribe(
-        audio,
+        _normalize_peak(audio),
         language=language,
         beam_size=1,
         best_of=1,
@@ -201,7 +201,6 @@ def transcribe_partial(audio_bytes: bytes, language: str | None = "en") -> tuple
     detected_lang = language or info.language
     if is_hallucination(text, expected_language=detected_lang):
         return "", ""
-    print(text)
     return text, detected_lang
 
 
@@ -224,10 +223,13 @@ def transcribe_final(
         result = _deepgram_transcribe(audio_bytes, language)
         if result is not None:
             text, detected_lang = result
+            print("[STT] Provider: Deepgram")
             return ("", "") if is_hallucination(text, expected_language=detected_lang) else (text, detected_lang)
+        print("[STT] Deepgram failed, falling back to Whisper")
 
+    print(f"[STT] Provider: Whisper{' (fallback)' if settings.deepgram_api_key else ''}")
     segments, info = _get_model(settings.whisper_model_size).transcribe(
-        audio,
+        _normalize_peak(audio),
         language=language,
         beam_size=2,
         best_of=2,
@@ -246,7 +248,6 @@ def transcribe_final(
     detected_lang = language or info.language
     if is_hallucination(text, expected_language=detected_lang):
         return "", ""
-    print(text)
     return text, detected_lang
 
 

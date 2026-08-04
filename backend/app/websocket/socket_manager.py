@@ -11,6 +11,11 @@ from app.translation.translator import translate
 
 sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
 
+
+def _ts() -> str:
+    t = time.time()
+    return time.strftime("%H:%M:%S", time.localtime(t)) + f".{int(t % 1 * 1000):03d}"
+
 # room_code -> {sid: {"user_id": str, "full_name": str}}
 rooms: dict[str, dict[str, dict]] = {}
 
@@ -19,6 +24,9 @@ rooms: dict[str, dict[str, dict]] = {}
 streaming_sessions: dict[str, StreamingSession] = {}
 # sid -> last partial text emitted, so we don't spam identical partials.
 last_partial_text: dict[str, str] = {}
+# sid -> lock, so overlapping speech events for the same speaker never
+# transcribe concurrently.
+transcription_locks: dict[str, asyncio.Lock] = {}
 
 
 def _get_user_by_id(user_id: str | None) -> User | None:
@@ -203,41 +211,56 @@ def _save_transcript_entry(room_code: str, user_id: str, speaker_name: str, text
 
 
 async def _handle_speech_event(sid: str, room_code: str, user_id: str, full_name: str, event: SpeechEvent) -> None:
-    try:
-        if event.kind == "partial" and settings.enable_partial_transcripts:
+    if event.kind == "partial":
+        if not settings.enable_partial_transcripts:
+            return
+        try:
             text, _ = await asyncio.to_thread(transcribe_partial, event.audio)
-            if not text or text == last_partial_text.get(sid):
-                return
-            last_partial_text[sid] = text
-            await sio.emit("partial-transcript", {"sid": sid, "text": text}, room=room_code)
+        except Exception:
             return
-
-        # event.kind == "final"
-        last_partial_text.pop(sid, None)
-        print(f"[stt-debug] FINAL event sid={sid} bytes={len(event.audio)}", flush=True)
-        text, detected_lang = await asyncio.to_thread(transcribe_final, event.audio)
-        print(f"[stt-debug] transcribe_final -> text={text!r} lang={detected_lang!r}", flush=True)
-        if not text:
+        if not text or text == last_partial_text.get(sid):
             return
-    except Exception:
-        import traceback
-        traceback.print_exc()
+        last_partial_text[sid] = text
+        await sio.emit("partial-transcript", {"sid": sid, "text": text}, room=room_code)
         return
 
-    await asyncio.to_thread(_save_transcript_entry, room_code, user_id, full_name, text, detected_lang)
+    pipeline_start = time.perf_counter()
 
     participants = rooms.get(room_code, {})
     user_ids = [p["user_id"] for p in participants.values()]
-    caption_langs = await asyncio.to_thread(_get_caption_languages, user_ids)
+    caption_langs_task = asyncio.create_task(asyncio.to_thread(_get_caption_languages, user_ids))
 
-    translations: dict[str, str] = {}
-    for p in participants.values():
-        target_lang = caption_langs.get(p["user_id"], "en")
-        if target_lang in translations or target_lang == detected_lang:
-            continue
-        translated = await asyncio.to_thread(translate, text, detected_lang, target_lang)
-        if translated is not None:
-            translations[target_lang] = translated
+    lock = transcription_locks.setdefault(sid, asyncio.Lock())
+    async with lock:
+        last_partial_text.pop(sid, None)
+        stt_start = time.perf_counter()
+        try:
+            text, detected_lang = await asyncio.to_thread(transcribe_final, event.audio)
+        except Exception:
+            text = ""
+        stt_ms = (time.perf_counter() - stt_start) * 1000
+        if not text:
+            caption_langs_task.cancel()
+            return
+
+    print(f"[STT] Text: {text!r} ({_ts()})")
+    print(f"[STT] Time: {stt_ms:.0f}ms")
+
+    asyncio.create_task(asyncio.to_thread(_save_transcript_entry, room_code, user_id, full_name, text, detected_lang))
+
+    caption_langs = await caption_langs_task
+    targets = dict.fromkeys(caption_langs.get(p["user_id"], "en") for p in participants.values())
+    targets.pop(detected_lang, None)
+
+    translate_start = time.perf_counter()
+    results = await asyncio.gather(*(asyncio.to_thread(translate, text, detected_lang, t) for t in targets))
+    translate_ms = (time.perf_counter() - translate_start) * 1000
+    translations = {t: r for t, r in zip(targets, results) if r is not None}
+
+    for t, r in translations.items():
+        print(f"[Translation] {detected_lang}->{t}: {r!r} ({_ts()})")
+    print(f"[Translation] Time: {translate_ms:.0f}ms")
+    print(f"[Pipeline] Total: {(time.perf_counter() - pipeline_start) * 1000:.0f}ms\n")
 
     await sio.emit(
         "caption",
@@ -258,15 +281,12 @@ async def audio_chunk(sid, data):
     room_code = data["room_code"]
     chunk = data["chunk"]
     if not isinstance(chunk, (bytes, bytearray)):
-        print(f"[stt-debug] dropped non-bytes chunk sid={sid} type={type(chunk)}", flush=True)
         return
 
     session = streaming_sessions.setdefault(sid, StreamingSession())
     try:
         events = session.push(bytes(chunk))
     except Exception:
-        import traceback
-        traceback.print_exc()
         return
     if not events:
         return
