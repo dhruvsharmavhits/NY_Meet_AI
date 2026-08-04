@@ -9,6 +9,7 @@ interface VideoGridProps {
   cameraOn: boolean;
   screenSharing: boolean;
   remoteStreams: Record<string, MediaStream>;
+  remoteScreenStreams: Record<string, MediaStream>;
   participants: Record<string, Participant>;
 }
 
@@ -43,20 +44,21 @@ export function VideoGrid({
   cameraOn,
   screenSharing,
   remoteStreams,
+  remoteScreenStreams,
   participants,
 }: VideoGridProps) {
   const remoteSids = Object.keys(participants);
   const remoteSharingSid = remoteSids.find((sid) => participants[sid]?.screenSharing);
 
   // A screen share — ours or a remote's — takes over as one big, automatically
-  // pinned tile, with everyone else in a filmstrip alongside it (matches the
-  // familiar Meet/Zoom/Teams layout).
+  // pinned tile, with everyone (including the presenter's camera) in a
+  // filmstrip alongside it (matches the familiar Meet/Zoom/Teams layout).
   const pinned: Tile | null = screenSharing
     ? { key: "local-screen", stream: screenStream, label: "You're presenting", muted: true }
     : remoteSharingSid
       ? {
-          key: remoteSharingSid,
-          stream: remoteStreams[remoteSharingSid] ?? null,
+          key: `${remoteSharingSid}-screen`,
+          stream: remoteScreenStreams[remoteSharingSid] ?? null,
           label: `${participants[remoteSharingSid]?.full_name ?? "Participant"} is presenting`,
         }
       : null;
@@ -71,15 +73,13 @@ export function VideoGrid({
     cameraOff: !cameraOn,
   };
 
-  const remoteTiles: Tile[] = remoteSids
-    .filter((sid) => sid !== remoteSharingSid)
-    .map((sid) => ({
-      key: sid,
-      stream: remoteStreams[sid] ?? null,
-      label: participants[sid]?.full_name ?? "Participant",
-      micMuted: participants[sid]?.micOn === false,
-      cameraOff: participants[sid]?.cameraOn === false,
-    }));
+  const remoteTiles: Tile[] = remoteSids.map((sid) => ({
+    key: sid,
+    stream: remoteStreams[sid] ?? null,
+    label: participants[sid]?.full_name ?? "Participant",
+    micMuted: participants[sid]?.micOn === false,
+    cameraOff: participants[sid]?.cameraOn === false,
+  }));
 
   const stripTiles = [localTile, ...remoteTiles];
 

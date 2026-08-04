@@ -86,6 +86,7 @@ export default function MeetingRoomPage() {
     localStream,
     screenStream,
     remoteStreams,
+    remoteScreenStreams,
     participants,
     messages,
     captions,
@@ -290,6 +291,7 @@ export default function MeetingRoomPage() {
           cameraOn={cameraOn}
           screenSharing={screenSharing}
           remoteStreams={remoteStreams}
+          remoteScreenStreams={remoteScreenStreams}
           participants={participants}
         />
 

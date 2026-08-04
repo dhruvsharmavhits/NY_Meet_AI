@@ -38,6 +38,7 @@ export function useMeetingRoom({
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<Record<string, MediaStream>>({});
+  const [remoteScreenStreams, setRemoteScreenStreams] = useState<Record<string, MediaStream>>({});
   const [participants, setParticipants] = useState<Record<string, Participant>>({});
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [captions, setCaptions] = useState<Caption[]>([]);
@@ -52,11 +53,13 @@ export function useMeetingRoom({
   const peerConnections = useRef<Record<string, RTCPeerConnection>>({});
   const videoSendersRef = useRef<Record<string, RTCRtpSender>>({});
   const audioSendersRef = useRef<Record<string, RTCRtpSender>>({});
+  const screenSendersRef = useRef<Record<string, RTCRtpSender>>({});
   const outgoingStreamRef = useRef<MediaStream | null>(null);
   if (outgoingStreamRef.current === null && typeof window !== "undefined") {
     outgoingStreamRef.current = new MediaStream();
   }
   const remoteMediaStreamsRef = useRef<Record<string, MediaStream>>({});
+  const remoteScreenMediaStreamsRef = useRef<Record<string, MediaStream>>({});
   const localStreamRef = useRef<MediaStream | null>(null);
   const cameraTrackRef = useRef<MediaStreamTrack | null>(null);
   const screenTrackRef = useRef<MediaStreamTrack | null>(null);
@@ -80,16 +83,24 @@ export function useMeetingRoom({
       // answerer's reused (auto-created-by-setRemoteDescription) transceiver
       // does not do by default, leaving it empty. Build our own per-peer
       // MediaStream from whatever tracks arrive instead — robust regardless
-      // of msid negotiation.
-      let stream = remoteMediaStreamsRef.current[sid];
+      // of msid negotiation. The screen track is sent via addTrack() with no
+      // stream, so an empty event.streams also doubles as the camera/screen
+      // signal for video tracks.
+      const isScreen = event.track.kind === "video" && event.streams.length === 0;
+      const streamsRef = isScreen ? remoteScreenMediaStreamsRef : remoteMediaStreamsRef;
+      let stream = streamsRef.current[sid];
       if (!stream) {
         stream = new MediaStream();
-        remoteMediaStreamsRef.current[sid] = stream;
+        streamsRef.current[sid] = stream;
       }
       if (!stream.getTracks().includes(event.track)) {
         stream.addTrack(event.track);
       }
-      setRemoteStreams((prev) => ({ ...prev, [sid]: stream }));
+      if (isScreen) {
+        setRemoteScreenStreams((prev) => ({ ...prev, [sid]: stream }));
+      } else {
+        setRemoteStreams((prev) => ({ ...prev, [sid]: stream }));
+      }
     };
 
     peerConnections.current[sid] = pc;
@@ -101,7 +112,7 @@ export function useMeetingRoom({
   // there's nothing yet for us to reuse.
   const attachOutgoingTracksAsOfferer = useCallback((sid: string, pc: RTCPeerConnection) => {
     const audioTrack = localStreamRef.current?.getAudioTracks()[0] ?? null;
-    const videoTrack = screenSharingRef.current ? screenTrackRef.current : cameraTrackRef.current;
+    const videoTrack = cameraTrackRef.current;
     const streams = outgoingStreamRef.current ? [outgoingStreamRef.current] : undefined;
 
     const audioTransceiver = pc.addTransceiver(audioTrack ?? "audio", { direction: "sendrecv", streams });
@@ -120,7 +131,7 @@ export function useMeetingRoom({
   // dropping our outgoing audio/video to this peer from the very start.
   const attachOutgoingTracksAsAnswerer = useCallback((sid: string, pc: RTCPeerConnection) => {
     const audioTrack = localStreamRef.current?.getAudioTracks()[0] ?? null;
-    const videoTrack = screenSharingRef.current ? screenTrackRef.current : cameraTrackRef.current;
+    const videoTrack = cameraTrackRef.current;
 
     const audioTransceiver = pc.getTransceivers().find((t) => t.receiver.track?.kind === "audio");
     if (audioTransceiver) {
@@ -144,8 +155,15 @@ export function useMeetingRoom({
     delete peerConnections.current[sid];
     delete videoSendersRef.current[sid];
     delete audioSendersRef.current[sid];
+    delete screenSendersRef.current[sid];
     delete remoteMediaStreamsRef.current[sid];
+    delete remoteScreenMediaStreamsRef.current[sid];
     setRemoteStreams((prev) => {
+      const next = { ...prev };
+      delete next[sid];
+      return next;
+    });
+    setRemoteScreenStreams((prev) => {
       const next = { ...prev };
       delete next[sid];
       return next;
@@ -212,8 +230,11 @@ export function useMeetingRoom({
         peerConnections.current = {};
         videoSendersRef.current = {};
         audioSendersRef.current = {};
+        screenSendersRef.current = {};
         remoteMediaStreamsRef.current = {};
+        remoteScreenMediaStreamsRef.current = {};
         setRemoteStreams({});
+        setRemoteScreenStreams({});
         setParticipants({});
         // socket.io-client auto-reconnects; on reconnect the "connect" handler
         // re-emits join-room and rebuilds the mesh from scratch with fresh sids.
@@ -271,6 +292,9 @@ export function useMeetingRoom({
             const pc = peerConnections.current[from] ?? createPeerConnection(from);
             await pc.setRemoteDescription(new RTCSessionDescription(payload as RTCSessionDescriptionInit));
             attachOutgoingTracksAsAnswerer(from, pc);
+            if (screenSharingRef.current && screenTrackRef.current && !screenSendersRef.current[from]) {
+              screenSendersRef.current[from] = pc.addTrack(screenTrackRef.current);
+            }
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
             socket.emit("signal", { to: from, type: "answer", payload: pc.localDescription });
@@ -349,12 +373,15 @@ export function useMeetingRoom({
       peerConnections.current = {};
       videoSendersRef.current = {};
       audioSendersRef.current = {};
+      screenSendersRef.current = {};
       remoteMediaStreamsRef.current = {};
+      remoteScreenMediaStreamsRef.current = {};
 
       screenTrackRef.current?.stop();
       screenTrackRef.current = null;
       screenSharingRef.current = false;
       setScreenStream(null);
+      setRemoteScreenStreams({});
 
       localStreamRef.current?.getTracks().forEach((t) => t.stop());
       localStreamRef.current = null;
@@ -408,11 +435,9 @@ export function useMeetingRoom({
       }
       cameraTrackRef.current = null;
 
-      if (!screenSharingRef.current) {
-        Object.values(videoSendersRef.current).forEach((sender) => {
-          sender.replaceTrack(null).catch(() => {});
-        });
-      }
+      Object.values(videoSendersRef.current).forEach((sender) => {
+        sender.replaceTrack(null).catch(() => {});
+      });
 
       cameraOnRef.current = false;
       setCameraOn(false);
@@ -439,11 +464,9 @@ export function useMeetingRoom({
         setLocalStream(newStream);
       }
 
-      if (!screenSharingRef.current) {
-        Object.values(videoSendersRef.current).forEach((sender) => {
-          sender.replaceTrack(newTrack).catch(() => {});
-        });
-      }
+      Object.values(videoSendersRef.current).forEach((sender) => {
+        sender.replaceTrack(newTrack).catch(() => {});
+      });
 
       cameraOnRef.current = true;
       setCameraOn(true);
@@ -461,9 +484,8 @@ export function useMeetingRoom({
     screenSharingRef.current = false;
     setScreenStream(null);
 
-    const cameraTrack = cameraTrackRef.current;
-    Object.values(videoSendersRef.current).forEach((sender) => {
-      sender.replaceTrack(cameraTrack ?? null).catch(() => {});
+    Object.values(screenSendersRef.current).forEach((sender) => {
+      sender.replaceTrack(null).catch(() => {});
     });
 
     setScreenSharing(false);
@@ -485,9 +507,17 @@ export function useMeetingRoom({
       screenSharingRef.current = true;
       setScreenStream(stream);
 
-      Object.values(videoSendersRef.current).forEach((sender) => {
-        sender.replaceTrack(screenTrack).catch(() => {});
-      });
+      // Sent as its own track/transceiver (not swapped into the camera's via
+      // replaceTrack) so remote participants keep seeing the camera feed too
+      // — this needs a renegotiation round trip per peer connection.
+      await Promise.all(
+        Object.entries(peerConnections.current).map(async ([sid, pc]) => {
+          screenSendersRef.current[sid] = pc.addTrack(screenTrack);
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          getSocket().emit("signal", { to: sid, type: "offer", payload: pc.localDescription });
+        })
+      );
 
       // Fires when the browser's native "Stop sharing" control is used
       // instead of our in-app toolbar button.
@@ -506,6 +536,7 @@ export function useMeetingRoom({
     localStream,
     screenStream,
     remoteStreams,
+    remoteScreenStreams,
     participants,
     messages,
     captions,
