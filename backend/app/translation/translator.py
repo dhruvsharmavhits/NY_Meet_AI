@@ -5,6 +5,7 @@ import ctranslate2
 import transformers
 
 from app.config import settings
+from app.translation.entity_mask import mask, unmask
 from app.translation.language_codes import to_flores
 
 _translator: ctranslate2.Translator | None = None
@@ -55,11 +56,13 @@ def translate(text: str, src_iso: str, tgt_iso: str) -> str | None:
     if src_flores is None or tgt_flores is None:
         return None
 
+    masked_text, entities = mask(text)
+
     tokenizer = _get_tokenizer()
     t0 = time.perf_counter()
     with _encode_lock:
         tokenizer.src_lang = src_flores
-        tokens = tokenizer.convert_ids_to_tokens(tokenizer.encode(text))
+        tokens = tokenizer.convert_ids_to_tokens(tokenizer.encode(masked_text))
     t1 = time.perf_counter()
 
     results = _get_translator().translate_batch([tokens], target_prefix=[[tgt_flores]])
@@ -67,6 +70,7 @@ def translate(text: str, src_iso: str, tgt_iso: str) -> str | None:
 
     out_tokens = results[0].hypotheses[0][1:]
     decoded = tokenizer.decode(tokenizer.convert_tokens_to_ids(out_tokens))
+    decoded = unmask(decoded, entities)
     t3 = time.perf_counter()
 
     print(
