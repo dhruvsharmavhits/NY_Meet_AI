@@ -41,26 +41,25 @@ function initialsFor(name: string): string {
 export function VideoTile({ stream, label, muted, mirrored, micMuted, cameraOff }: VideoTileProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
-  const showVideo = !!stream && !cameraOff;   // <-- moved above the effect
-
   useEffect(() => {
     if (videoRef.current) {
       videoRef.current.srcObject = stream;
     }
-  }, [stream, showVideo]);   // <-- ADD showVideo — re-attach when the <video> element remounts
+  }, [stream]);
+
   const avatarColor = colorForName(label);
+  const showAvatar = !stream || cameraOff;
 
   return (
     <div className="group relative h-full w-full overflow-hidden rounded-2xl bg-[#1e1e2e] transition-all duration-300">
-      {showVideo ? (
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted={muted}
-          className={`h-full w-full object-contain ${mirrored ? "-scale-x-100" : ""}`}
-        />
-      ) : (
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted={muted}
+        className={`h-full w-full object-contain ${mirrored ? "-scale-x-100" : ""} ${showAvatar ? "hidden" : ""}`}
+      />
+      {showAvatar && (
         <div className="flex h-full w-full items-center justify-center" style={{ background: `linear-gradient(135deg, ${avatarColor}22 0%, ${avatarColor}11 100%)` }}>
           <div
             className="flex h-20 w-20 items-center justify-center rounded-full text-2xl font-semibold text-white shadow-lg sm:h-24 sm:w-24 sm:text-3xl"
