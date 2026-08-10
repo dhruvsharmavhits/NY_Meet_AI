@@ -44,8 +44,17 @@ export function VideoTile({ stream, label, muted, mirrored, micMuted, cameraOff 
   useEffect(() => {
     if (videoRef.current) {
       videoRef.current.srcObject = stream;
+      console.log("[rtc] VideoTile srcObject set", {
+        label,
+        streamId: stream?.id,
+        trackKinds: stream?.getTracks().map((t) => `${t.kind}:${t.readyState}:${t.muted ? "muted" : "live"}`),
+        muted,
+      });
+      videoRef.current
+        .play()
+        .catch((err) => console.log("[rtc] VideoTile play() rejected", { label, err: String(err) }));
     }
-  }, [stream]);
+  }, [stream, label, muted]);
 
   const avatarColor = colorForName(label);
   const showAvatar = !stream || cameraOff;

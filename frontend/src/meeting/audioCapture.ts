@@ -35,6 +35,12 @@ function floatTo16BitPCM(input: Float32Array): Int16Array {
 
 export function startAudioCapture(stream: MediaStream, roomCode: string, socket: Socket): () => void {
   const audioTrack = stream.getAudioTracks()[0];
+  console.log("[rtc] startAudioCapture", {
+    hasAudioTrack: !!audioTrack,
+    trackEnabled: audioTrack?.enabled,
+    trackReadyState: audioTrack?.readyState,
+    settings: audioTrack?.getSettings?.(),
+  });
   if (!audioTrack) {
     // No microphone at all — nothing to capture.
     return () => {};

@@ -43,12 +43,15 @@ def _get_user_by_id(user_id: str | None) -> User | None:
 async def connect(sid, environ, auth):
     user = _get_user_by_id((auth or {}).get("user_id"))
     if user is None:
+        print(f"[rtc] connect REJECTED sid={sid} auth={auth}", flush=True)
         raise ConnectionRefusedError("unauthorized")
     await sio.save_session(sid, {"user_id": user.id, "full_name": user.full_name})
+    print(f"[rtc] connect sid={sid} user={user.id} ({user.full_name})", flush=True)
 
 
 @sio.event
 async def disconnect(sid):
+    print(f"[rtc] disconnect sid={sid}", flush=True)
     streaming_sessions.pop(sid, None)
     last_partial_text.pop(sid, None)
     for room_code, participants in list(rooms.items()):
@@ -88,6 +91,7 @@ async def join_room(sid, data):
         "screen_sharing": False,
     }
     await sio.enter_room(sid, room_code)
+    print(f"[rtc] join-room sid={sid} room={room_code} mic_on={mic_on} camera_on={camera_on} existing_peers={[p['sid'] for p in existing]}", flush=True)
 
     await sio.emit("existing-peers", {"peers": existing}, room=sid)
     await sio.emit(
@@ -152,6 +156,7 @@ async def leave_room(sid, data):
 
 @sio.on("signal")
 async def signal(sid, data):
+    print(f"[rtc] signal from={sid} to={data.get('to')} type={data.get('type')}", flush=True)
     await sio.emit(
         "signal",
         {"from": sid, "type": data["type"], "payload": data["payload"]},

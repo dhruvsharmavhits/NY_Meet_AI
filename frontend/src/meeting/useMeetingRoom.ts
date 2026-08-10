@@ -3,6 +3,8 @@ import { getSocket, disconnectSocket } from "@/services/socket";
 import { startAudioCapture } from "@/meeting/audioCapture";
 import type { Caption, ChatMessage, Participant } from "@/meeting/types";
 
+const rtcLog = (...args: unknown[]) => console.log("[rtc]", ...args);
+
 const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
@@ -75,14 +77,64 @@ export function useMeetingRoom({
   const everConnectedRef = useRef(false);
 
   const createPeerConnection = useCallback((sid: string) => {
+    rtcLog("createPeerConnection", { sid });
     const pc = new RTCPeerConnection(ICE_SERVERS);
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
+        rtcLog("onicecandidate -> sending", { sid, type: event.candidate.type, protocol: event.candidate.protocol });
         getSocket().emit("signal", { to: sid, type: "ice-candidate", payload: event.candidate });
+      } else {
+        rtcLog("onicecandidate: gathering complete", { sid });
       }
     };
+    pc.oniceconnectionstatechange = () => {
+      rtcLog("iceConnectionState", { sid, state: pc.iceConnectionState });
+    };
+    pc.onconnectionstatechange = () => {
+      rtcLog("connectionState", { sid, state: pc.connectionState });
+    };
+    pc.onsignalingstatechange = () => {
+      rtcLog("signalingState", { sid, state: pc.signalingState });
+    };
     pc.ontrack = (event) => {
+      rtcLog("ontrack", {
+        sid,
+        kind: event.track.kind,
+        trackId: event.track.id,
+        readyState: event.track.readyState,
+        muted: event.track.muted,
+        enabled: event.track.enabled,
+        streamsCount: event.streams.length,
+      });
+      if (event.track.kind === "audio") {
+        // Poll RTP-level stats for the inbound audio track so we can tell
+        // apart "no audio ever arrives" (network/negotiation — bytesReceived
+        // stays 0) from "audio arrives but nothing is heard" (playback —
+        // bytesReceived climbs but audioLevel stays 0 or output is muted).
+        const trackId = event.track.id;
+        const intervalId = window.setInterval(async () => {
+          if (pc.connectionState === "closed") {
+            window.clearInterval(intervalId);
+            return;
+          }
+          const stats = await pc.getStats(event.track);
+          stats.forEach((report) => {
+            if (report.type === "inbound-rtp" && report.kind === "audio") {
+              rtcLog("inbound audio stats", {
+                sid,
+                trackId,
+                bytesReceived: report.bytesReceived,
+                packetsReceived: report.packetsReceived,
+                packetsLost: report.packetsLost,
+                audioLevel: report.audioLevel,
+                jitter: report.jitter,
+              });
+            }
+          });
+        }, 3000);
+        event.track.addEventListener("ended", () => window.clearInterval(intervalId));
+      }
       // Don't rely on event.streams[0] — whether it's populated depends on
       // both sides correctly negotiating an msid/stream grouping, which the
       // answerer's reused (auto-created-by-setRemoteDescription) transceiver
@@ -105,6 +157,12 @@ export function useMeetingRoom({
       const existingTracks = prevStream ? prevStream.getTracks().filter((t) => t !== event.track) : [];
       const stream = new MediaStream([...existingTracks, event.track]);
       streamsRef.current[sid] = stream;
+      rtcLog("ontrack -> stream updated", {
+        sid,
+        isScreen,
+        streamId: stream.id,
+        trackKinds: stream.getTracks().map((t) => t.kind),
+      });
       if (isScreen) {
         setRemoteScreenStreams((prev) => ({ ...prev, [sid]: stream }));
       } else {
@@ -123,6 +181,13 @@ export function useMeetingRoom({
     const audioTrack = localStreamRef.current?.getAudioTracks()[0] ?? null;
     const videoTrack = cameraTrackRef.current;
     const streams = outgoingStreamRef.current ? [outgoingStreamRef.current] : undefined;
+    rtcLog("attachOutgoingTracksAsOfferer", {
+      sid,
+      hasAudioTrack: !!audioTrack,
+      audioTrackEnabled: audioTrack?.enabled,
+      audioTrackReadyState: audioTrack?.readyState,
+      hasVideoTrack: !!videoTrack,
+    });
 
     const audioTransceiver = pc.addTransceiver(audioTrack ?? "audio", { direction: "sendrecv", streams });
     audioSendersRef.current[sid] = audioTransceiver.sender;
@@ -141,6 +206,14 @@ export function useMeetingRoom({
   const attachOutgoingTracksAsAnswerer = useCallback((sid: string, pc: RTCPeerConnection) => {
     const audioTrack = localStreamRef.current?.getAudioTracks()[0] ?? null;
     const videoTrack = cameraTrackRef.current;
+    rtcLog("attachOutgoingTracksAsAnswerer", {
+      sid,
+      hasAudioTrack: !!audioTrack,
+      audioTrackEnabled: audioTrack?.enabled,
+      audioTrackReadyState: audioTrack?.readyState,
+      hasVideoTrack: !!videoTrack,
+      transceiverCount: pc.getTransceivers().length,
+    });
 
     const audioTransceiver = pc.getTransceivers().find((t) => t.receiver.track?.kind === "audio");
     if (audioTransceiver) {
@@ -148,6 +221,8 @@ export function useMeetingRoom({
       audioTransceiver.sender.setStreams?.(outgoingStreamRef.current ?? new MediaStream());
       if (audioTrack) audioTransceiver.sender.replaceTrack(audioTrack).catch(() => {});
       audioSendersRef.current[sid] = audioTransceiver.sender;
+    } else {
+      rtcLog("attachOutgoingTracksAsAnswerer: NO audio transceiver found!", { sid });
     }
 
     const videoTransceiver = pc.getTransceivers().find((t) => t.receiver.track?.kind === "video");
@@ -270,6 +345,7 @@ export function useMeetingRoom({
             attachOutgoingTracksAsOfferer(peer.sid, pc);
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
+            rtcLog("sending offer", { to: peer.sid, sdpHasAudio: offer.sdp?.includes("m=audio") });
             socket.emit("signal", { to: peer.sid, type: "offer", payload: pc.localDescription });
           }
         }
@@ -296,9 +372,12 @@ export function useMeetingRoom({
         "signal",
         async (data: { from: string; type: string; payload: RTCSessionDescriptionInit | RTCIceCandidateInit }) => {
           const { from, type, payload } = data;
+          rtcLog("signal received", { from, type });
 
           if (type === "offer") {
             const pc = peerConnections.current[from] ?? createPeerConnection(from);
+            const offerSdp = (payload as RTCSessionDescriptionInit).sdp;
+            rtcLog("received offer", { from, sdpHasAudio: offerSdp?.includes("m=audio") });
             await pc.setRemoteDescription(new RTCSessionDescription(payload as RTCSessionDescriptionInit));
             attachOutgoingTracksAsAnswerer(from, pc);
             if (screenSharingRef.current && screenTrackRef.current && !screenSendersRef.current[from]) {
@@ -306,13 +385,27 @@ export function useMeetingRoom({
             }
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
+            rtcLog("sending answer", { to: from, sdpHasAudio: answer.sdp?.includes("m=audio") });
             socket.emit("signal", { to: from, type: "answer", payload: pc.localDescription });
           } else if (type === "answer") {
             const pc = peerConnections.current[from];
-            await pc?.setRemoteDescription(new RTCSessionDescription(payload as RTCSessionDescriptionInit));
+            if (!pc) {
+              rtcLog("received answer but no pc exists for", { from });
+              return;
+            }
+            await pc.setRemoteDescription(new RTCSessionDescription(payload as RTCSessionDescriptionInit));
+            rtcLog("applied answer", { from });
           } else if (type === "ice-candidate") {
             const pc = peerConnections.current[from];
-            await pc?.addIceCandidate(new RTCIceCandidate(payload as RTCIceCandidateInit));
+            if (!pc) {
+              rtcLog("received ice-candidate but no pc exists for", { from });
+              return;
+            }
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate(payload as RTCIceCandidateInit));
+            } catch (err) {
+              rtcLog("addIceCandidate failed", { from, err });
+            }
           }
         }
       );
@@ -423,9 +516,12 @@ export function useMeetingRoom({
       track.enabled = !track.enabled;
       micOnRef.current = track.enabled;
       setMicOn(track.enabled);
+      rtcLog("toggleMic", { enabled: track.enabled });
       if (roomCode) {
         getSocket().emit("media-state", { room_code: roomCode, mic_on: track.enabled, camera_on: cameraOnRef.current });
       }
+    } else {
+      rtcLog("toggleMic: no local audio track to toggle");
     }
   }, [roomCode]);
 
