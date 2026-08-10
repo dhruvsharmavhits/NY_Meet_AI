@@ -93,14 +93,18 @@ export function useMeetingRoom({
       // signal for video tracks.
       const isScreen = event.track.kind === "video" && event.streams.length === 0;
       const streamsRef = isScreen ? remoteScreenMediaStreamsRef : remoteMediaStreamsRef;
-      let stream = streamsRef.current[sid];
-      if (!stream) {
-        stream = new MediaStream();
-        streamsRef.current[sid] = stream;
-      }
-      if (!stream.getTracks().includes(event.track)) {
-        stream.addTrack(event.track);
-      }
+      const prevStream = streamsRef.current[sid];
+      // Always build a *new* MediaStream instance rather than mutating the
+      // previous one in place. VideoTile's srcObject-assignment effect is
+      // keyed on stream identity ([stream] dependency) — if audio and video
+      // tracks for the same peer arrive in separate ontrack events (which
+      // real network jitter makes common, unlike same-tick local testing),
+      // mutating the existing stream leaves that identity unchanged, so the
+      // effect never reruns and the second track (often audio) never gets
+      // attached to the <video> element even though it keeps playing.
+      const existingTracks = prevStream ? prevStream.getTracks().filter((t) => t !== event.track) : [];
+      const stream = new MediaStream([...existingTracks, event.track]);
+      streamsRef.current[sid] = stream;
       if (isScreen) {
         setRemoteScreenStreams((prev) => ({ ...prev, [sid]: stream }));
       } else {
