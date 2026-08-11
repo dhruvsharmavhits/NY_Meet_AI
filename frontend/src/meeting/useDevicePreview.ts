@@ -102,47 +102,54 @@ export function useDevicePreview(enabled: boolean): UseDevicePreviewResult {
   }, []);
 
   const toggleCamera = useCallback(async () => {
-    if (!streamRef.current) return;
+  const currentStream = streamRef.current;
+  if (!currentStream) return;
 
-    const videoTrack = streamRef.current.getVideoTracks()[0];
+  const videoTrack = currentStream.getVideoTracks()[0];
 
-    // Turn camera OFF
-    if (cameraOn) {
-      if (videoTrack) {
-        videoTrack.stop();
+  // CAMERA OFF
+  if (cameraOn) {
+    if (videoTrack) {
+      videoTrack.stop();
 
-        streamRef.current.removeTrack(videoTrack);
+      const audioTracks = currentStream.getAudioTracks();
+      const audioOnlyStream = new MediaStream(audioTracks);
 
-        setStream(new MediaStream(streamRef.current.getTracks()));
-      }
-
-      setCameraOn(false);
-      return;
+      // IMPORTANT: update BOTH references
+      streamRef.current = audioOnlyStream;
+      setStream(audioOnlyStream);
     }
 
-    // Turn camera ON
-    try {
-      const videoStream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-      });
+    setCameraOn(false);
+    return;
+  }
 
-      const newTrack = videoStream.getVideoTracks()[0];
+  // CAMERA ON
+  try {
+    const videoStream = await navigator.mediaDevices.getUserMedia({
+      video: true,
+    });
 
-      streamRef.current.addTrack(newTrack);
+    const newVideoTrack = videoStream.getVideoTracks()[0];
 
-      const newStream = new MediaStream([
-        ...streamRef.current.getAudioTracks(),
-        newTrack,
-      ]);
-
-      streamRef.current = newStream;
-
-      setStream(newStream);
-      setCameraOn(true);
-    } catch (err) {
-      console.error("Unable to restart camera", err);
+    if (!newVideoTrack) {
+      throw new Error("No video track returned");
     }
-  }, [cameraOn]);
+
+    const audioTracks = currentStream.getAudioTracks();
+
+    const newStream = new MediaStream([
+      ...audioTracks,
+      newVideoTrack,
+    ]);
+
+    streamRef.current = newStream;
+    setStream(newStream);
+    setCameraOn(true);
+  } catch (err) {
+    console.error("Unable to restart camera", err);
+  }
+}, [cameraOn]);
 
   const release = useCallback(() => {
     releasedRef.current = true;

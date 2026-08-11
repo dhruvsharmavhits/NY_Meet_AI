@@ -35,44 +35,73 @@ function floatTo16BitPCM(input: Float32Array): Int16Array {
 
 export function startAudioCapture(stream: MediaStream, roomCode: string, socket: Socket): () => void {
   const audioTrack = stream.getAudioTracks()[0];
-  console.log("[rtc] startAudioCapture", {
-    hasAudioTrack: !!audioTrack,
-    trackEnabled: audioTrack?.enabled,
-    trackReadyState: audioTrack?.readyState,
-    settings: audioTrack?.getSettings?.(),
-  });
+  console.log(
+    `[rtc] startAudioCapture ${JSON.stringify({
+      hasAudioTrack: !!audioTrack,
+      trackEnabled: audioTrack?.enabled,
+      trackReadyState: audioTrack?.readyState,
+      settings: audioTrack?.getSettings?.(),
+    })}`
+  );
   if (!audioTrack) {
     // No microphone at all — nothing to capture.
     return () => {};
   }
 
-  const AudioContextCtor = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-  const audioContext = new AudioContextCtor();
-  const source = audioContext.createMediaStreamSource(stream);
-  const processor = audioContext.createScriptProcessor(4096, 1, 1);
-  const silentGain = audioContext.createGain();
-  silentGain.gain.value = 0;
+  // A *cloned* track still shares the same underlying native capture session
+  // as the original in Chrome, so a Web Audio graph on the clone still
+  // contends with the RTCRtpSender reading the original — starving the call
+  // audio to silence (proven by bytesReceived climbing on the peer connection
+  // while inbound-rtp audioLevel stayed flat 0 — STT worked, the call audio
+  // didn't). A genuinely independent getUserMedia() capture (its own native
+  // session) is required to decouple STT capture from the WebRTC send path.
+  let stopped = false;
+  let cleanup: (() => void) | null = null;
 
-  processor.onaudioprocess = (event) => {
-    // Skip entirely while the mic is toggled off — don't waste bandwidth or
-    // feed silence into the transcription pipeline (which can otherwise
-    // hallucinate captions from near-silence/background noise).
-    if (!audioTrack.enabled) return;
+  navigator.mediaDevices
+    .getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
+    .then((captureStream) => {
+      if (stopped) {
+        captureStream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+      const captureTrack = captureStream.getAudioTracks()[0];
 
-    const input = event.inputBuffer.getChannelData(0);
-    const downsampled = downsampleBuffer(input, audioContext.sampleRate, TARGET_SAMPLE_RATE);
-    const pcm16 = floatTo16BitPCM(downsampled);
-    socket.emit("audio-chunk", { room_code: roomCode, chunk: pcm16.buffer });
-  };
+      const AudioContextCtor = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const audioContext = new AudioContextCtor();
+      const source = audioContext.createMediaStreamSource(captureStream);
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      const silentGain = audioContext.createGain();
+      silentGain.gain.value = 0;
 
-  source.connect(processor);
-  processor.connect(silentGain);
-  silentGain.connect(audioContext.destination);
+      processor.onaudioprocess = (event) => {
+        // Skip entirely while the mic is toggled off — don't waste bandwidth or
+        // feed silence into the transcription pipeline (which can otherwise
+        // hallucinate captions from near-silence/background noise).
+        if (!audioTrack.enabled) return;
+
+        const input = event.inputBuffer.getChannelData(0);
+        const downsampled = downsampleBuffer(input, audioContext.sampleRate, TARGET_SAMPLE_RATE);
+        const pcm16 = floatTo16BitPCM(downsampled);
+        socket.emit("audio-chunk", { room_code: roomCode, chunk: pcm16.buffer });
+      };
+
+      source.connect(processor);
+      processor.connect(silentGain);
+      silentGain.connect(audioContext.destination);
+
+      cleanup = () => {
+        processor.disconnect();
+        source.disconnect();
+        silentGain.disconnect();
+        audioContext.close();
+        captureTrack.stop();
+      };
+    })
+    .catch(() => {});
 
   return () => {
-    processor.disconnect();
-    source.disconnect();
-    silentGain.disconnect();
-    audioContext.close();
+    stopped = true;
+    cleanup?.();
   };
 }

@@ -43,16 +43,23 @@ export function VideoTile({ stream, label, muted, mirrored, micMuted, cameraOff 
 
   useEffect(() => {
     if (videoRef.current) {
-      videoRef.current.srcObject = stream;
-      console.log("[rtc] VideoTile srcObject set", {
-        label,
-        streamId: stream?.id,
-        trackKinds: stream?.getTracks().map((t) => `${t.kind}:${t.readyState}:${t.muted ? "muted" : "live"}`),
-        muted,
-      });
+      // For a muted (local self-preview) tile, never hand the element the
+      // live mic track — Chrome only feeds real audio to one simultaneous
+      // consumer of a track, and this <video> mounts (claiming it) well
+      // before the RTCRtpSender does, silently starving the actual call
+      // audio sent to newly-joining peers even though it plays nothing here.
+      videoRef.current.srcObject = muted && stream ? new MediaStream(stream.getVideoTracks()) : stream;
+      console.log(
+        `[rtc] VideoTile srcObject set ${JSON.stringify({
+          label,
+          streamId: stream?.id,
+          trackKinds: stream?.getTracks().map((t) => `${t.kind}:${t.readyState}:${t.muted ? "muted" : "live"}`),
+          muted,
+        })}`
+      );
       videoRef.current
         .play()
-        .catch((err) => console.log("[rtc] VideoTile play() rejected", { label, err: String(err) }));
+        .catch((err) => console.log(`[rtc] VideoTile play() rejected ${JSON.stringify({ label, err: String(err) })}`));
     }
   }, [stream, label, muted]);
 

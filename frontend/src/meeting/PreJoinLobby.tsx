@@ -34,7 +34,7 @@ export function PreJoinLobby({ meetingTitle, roomCode, defaultName, defaultCapti
   useEffect(() => {
     if (!videoRef.current) return;
 
-    videoRef.current.srcObject = stream;
+    videoRef.current.srcObject = stream ? new MediaStream(stream.getVideoTracks()) : stream;
 
     if (stream) {
       videoRef.current.play().catch(() => {});
@@ -71,15 +71,14 @@ export function PreJoinLobby({ meetingTitle, roomCode, defaultName, defaultCapti
             className="relative w-full overflow-hidden rounded-3xl bg-[#1a1a2e] shadow-2xl ring-1 ring-black/5"
             style={{ minHeight: "320px", aspectRatio: "16/10" }}
           >
-            {cameraOn && stream ? (
-              <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                muted
-                className="absolute inset-0 h-full w-full -scale-x-100 object-contain"
-              />
-            ) : (
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              className={`absolute inset-0 h-full w-full -scale-x-100 object-contain ${cameraOn && stream ? "" : "hidden"}`}
+            />
+            {(!cameraOn || !stream) && (
               <div
                 className="absolute inset-0 flex flex-col items-center justify-center"
                 style={{ background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)" }}
