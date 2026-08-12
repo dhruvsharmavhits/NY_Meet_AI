@@ -167,6 +167,36 @@ export function useMeetingRoom({
         }, 3000);
         event.track.addEventListener("ended", () => window.clearInterval(intervalId));
       }
+
+      if (event.track.kind === "audio") {
+        console.log("[rtc] REMOTE AUDIO TRACK INITIAL", {
+          sid,
+          id: event.track.id,
+          enabled: event.track.enabled,
+          muted: event.track.muted,
+          readyState: event.track.readyState,
+        });
+
+        event.track.onunmute = () => {
+          console.log("[rtc] 🔊 REMOTE AUDIO TRACK UNMUTED", {
+            sid,
+            id: event.track.id,
+            enabled: event.track.enabled,
+            muted: event.track.muted,
+            readyState: event.track.readyState,
+          });
+        };
+
+        event.track.onmute = () => {
+          console.log("[rtc] 🔇 REMOTE AUDIO TRACK MUTED", {
+            sid,
+            id: event.track.id,
+            enabled: event.track.enabled,
+            muted: event.track.muted,
+            readyState: event.track.readyState,
+          });
+        };
+      }
       // Don't rely on event.streams[0] — whether it's populated depends on
       // both sides correctly negotiating an msid/stream grouping, which the
       // answerer's reused (auto-created-by-setRemoteDescription) transceiver
@@ -175,8 +205,36 @@ export function useMeetingRoom({
       // of msid negotiation. The screen track is sent via addTrack() with no
       // stream, so an empty event.streams also doubles as the camera/screen
       // signal for video tracks.
-      const isScreen = event.track.kind === "video" && event.streams.length === 0;
-      const streamsRef = isScreen ? remoteScreenMediaStreamsRef : remoteMediaStreamsRef;
+      let isScreen = false;
+
+      if (event.track.kind === "video") {
+        const videoTransceivers = pc
+          .getTransceivers()
+          .filter(
+            (transceiver) =>
+              transceiver.receiver.track?.kind === "video"
+          );
+
+        const transceiverIndex = event.transceiver
+          ? videoTransceivers.indexOf(event.transceiver)
+          : -1;
+
+        // Video transceiver #0 = camera
+        // Video transceiver #1+ = screen share
+        isScreen = transceiverIndex > 0;
+
+        rtcLog("video track classification", {
+          sid,
+          trackId: event.track.id,
+          transceiverIndex,
+          videoTransceiverCount: videoTransceivers.length,
+          isScreen,
+        });
+      }
+
+      const streamsRef = isScreen
+        ? remoteScreenMediaStreamsRef
+        : remoteMediaStreamsRef;
       const prevStream = streamsRef.current[sid];
       // Always build a *new* MediaStream instance rather than mutating the
       // previous one in place. VideoTile's srcObject-assignment effect is
@@ -210,62 +268,137 @@ export function useMeetingRoom({
   // description exists), we must create our own audio/video transceivers —
   // there's nothing yet for us to reuse.
   const attachOutgoingTracksAsOfferer = useCallback(
-  (sid: string, pc: RTCPeerConnection) => {
-    const stream = localStreamRef.current;
-
-    const audioTrack = stream?.getAudioTracks()[0] ?? null;
-    const videoTrack = cameraTrackRef.current;
-
-    rtcLog("attachOutgoingTracksAsOfferer", {
-      sid,
-      hasAudioTrack: !!audioTrack,
-      audioTrackEnabled: audioTrack?.enabled,
-      audioTrackReadyState: audioTrack?.readyState,
-      hasVideoTrack: !!videoTrack,
-    });
-
-    // ALWAYS create the audio transceiver.
-    // Audio must NOT depend on camera state.
-    const audioTransceiver = pc.addTransceiver("audio", {
-      direction: "sendrecv",
-    });
-
-    audioSendersRef.current[sid] = audioTransceiver.sender;
-
-    if (audioTrack) {
-      audioTransceiver.sender.replaceTrack(audioTrack).catch((err) => {
-        rtcLog("audio replaceTrack failed", {
-          sid,
-          error: String(err),
-        });
+    async (sid: string, pc: RTCPeerConnection) => {
+      const stream = localStreamRef.current;
+      rtcLog("LOCAL MEDIA BEFORE PEER ATTACH", {
+        streamExists: !!stream,
+        streamId: stream?.id ?? null,
+        trackKinds: stream?.getTracks().map((t) => ({
+          kind: t.kind,
+          id: t.id,
+          enabled: t.enabled,
+          muted: t.muted,
+          readyState: t.readyState,
+        })),
+        audioTracks: stream?.getAudioTracks().length ?? 0,
+        videoTracks: stream?.getVideoTracks().length ?? 0,
+        cameraRef: cameraTrackRef.current
+          ? {
+            id: cameraTrackRef.current.id,
+            enabled: cameraTrackRef.current.enabled,
+            readyState: cameraTrackRef.current.readyState,
+          }
+          : null,
       });
-    }
-
-    // ALWAYS create the video transceiver too.
-    // If camera is off, it simply has no video track.
-    const videoTransceiver = pc.addTransceiver("video", {
-      direction: "sendrecv",
-    });
-
-    videoSendersRef.current[sid] = videoTransceiver.sender;
-
-    if (videoTrack) {
-      videoTransceiver.sender.replaceTrack(videoTrack).catch((err) => {
-        rtcLog("video replaceTrack failed", {
-          sid,
-          error: String(err),
+      const audioTrack = stream?.getAudioTracks()[0] ?? null;
+      if (audioTrack) {
+        rtcLog("INITIAL AUDIO TRACK STATE", {
+          id: audioTrack.id,
+          enabled: audioTrack.enabled,
+          muted: audioTrack.muted,
+          readyState: audioTrack.readyState,
+          settings: audioTrack.getSettings(),
         });
-      });
-    }
+      }
+      const videoTrack = cameraTrackRef.current;
 
-    rtcLog("outgoing tracks attached", {
-      sid,
-      audioSenderTrack: audioTransceiver.sender.track?.id ?? null,
-      videoSenderTrack: videoTransceiver.sender.track?.id ?? null,
-    });
-  },
-  []
-);
+      rtcLog("attachOutgoingTracksAsOfferer", {
+        sid,
+        hasAudioTrack: !!audioTrack,
+        audioTrackEnabled: audioTrack?.enabled,
+        audioTrackReadyState: audioTrack?.readyState,
+        hasVideoTrack: !!videoTrack,
+      });
+
+      // ALWAYS create the audio transceiver.
+      // Audio must NOT depend on camera state.
+      const audioTransceiver = pc.addTransceiver("audio", {
+        direction: "sendrecv",
+      });
+
+      audioSendersRef.current[sid] = audioTransceiver.sender;
+
+      if (audioTrack) {
+        try {
+          await audioTransceiver.sender.replaceTrack(audioTrack);
+          const audioSender = audioTransceiver.sender;
+
+          const statsInterval = window.setInterval(async () => {
+            if (pc.connectionState === "closed") {
+              window.clearInterval(statsInterval);
+              return;
+            }
+
+            const stats = await pc.getStats(audioSender.track);
+
+            stats.forEach((report) => {
+              if (report.type === "outbound-rtp" && report.kind === "audio") {
+                rtcLog("OUTBOUND AUDIO STATS", {
+                  sid,
+                  senderTrackId: audioSender.track?.id ?? null,
+                  trackEnabled: audioSender.track?.enabled ?? null,
+                  trackReadyState: audioSender.track?.readyState ?? null,
+                  bytesSent: report.bytesSent,
+                  packetsSent: report.packetsSent,
+                  audioLevel: report.audioLevel ?? null,
+                });
+              }
+            });
+          }, 3000);
+          rtcLog("offerer audio attached BEFORE offer", {
+            sid,
+            trackId: audioTrack.id,
+            enabled: audioTrack.enabled,
+            readyState: audioTrack.readyState,
+            senderTrackId: audioTransceiver.sender.track?.id ?? null,
+          });
+        } catch (err) {
+          rtcLog("audio replaceTrack failed", {
+            sid,
+            error: String(err),
+          });
+          throw err;
+        }
+      }
+
+      // ALWAYS create the video transceiver too.
+      // If camera is off, it simply has no video track.
+      const videoTransceiver = pc.addTransceiver("video", {
+        direction: "sendrecv",
+      });
+
+      videoSendersRef.current[sid] = videoTransceiver.sender;
+
+      if (videoTrack) {
+        videoTransceiver.sender
+          .replaceTrack(videoTrack)
+          .then(() => {
+            if (stream) {
+              videoTransceiver.sender.setStreams(stream);
+            }
+
+            rtcLog("answerer video attached", {
+              sid,
+              trackId: videoTrack.id,
+              readyState: videoTrack.readyState,
+            });
+          })
+          .catch((err) => {
+            rtcLog("answerer video replaceTrack FAILED", {
+              sid,
+              error: String(err),
+            });
+          });
+      }
+
+      rtcLog("outgoing tracks attached", {
+        sid,
+        audioSenderTrack: audioTransceiver.sender.track?.id ?? null,
+        videoSenderTrack: videoTransceiver.sender.track?.id ?? null,
+      });
+    },
+    []
+  );
 
   // As the ANSWERER, setRemoteDescription(offer) auto-creates a local
   // transceiver per incoming m-line (recvonly by default, no track). Reuse
@@ -275,89 +408,122 @@ export function useMeetingRoom({
   // fresh recvonly-only transceiver handles the real connection — silently
   // dropping our outgoing audio/video to this peer from the very start.
   const attachOutgoingTracksAsAnswerer = useCallback(
-  (sid: string, pc: RTCPeerConnection) => {
-    const stream = localStreamRef.current;
+    async (sid: string, pc: RTCPeerConnection) => {
+      const stream = localStreamRef.current;
 
-    const audioTrack = stream?.getAudioTracks()[0] ?? null;
-    const videoTrack = cameraTrackRef.current;
-
-    rtcLog("attachOutgoingTracksAsAnswerer", {
-      sid,
-      hasAudioTrack: !!audioTrack,
-      audioTrackEnabled: audioTrack?.enabled,
-      audioTrackReadyState: audioTrack?.readyState,
-      hasVideoTrack: !!videoTrack,
-      transceiverCount: pc.getTransceivers().length,
-    });
-
-    const audioTransceiver = pc
-      .getTransceivers()
-      .find(
-        (t) =>
-          t.receiver.track?.kind === "audio"
-      );
-
-    if (!audioTransceiver) {
-      rtcLog("ERROR: no audio transceiver", {
-        sid,
-        transceivers: pc.getTransceivers().map((t) => ({
-          mid: t.mid,
-          direction: t.direction,
-          receiverKind: t.receiver.track?.kind,
-          senderKind: t.sender.track?.kind,
-        })),
-      });
-    } else {
-      audioTransceiver.direction = "sendrecv";
-
+      const audioTrack = stream?.getAudioTracks()[0] ?? null;
       if (audioTrack) {
-        audioTransceiver.sender
-          .replaceTrack(audioTrack)
-          .then(() => {
-            rtcLog("answerer audio attached", {
+        rtcLog("INITIAL AUDIO TRACK STATE", {
+          id: audioTrack.id,
+          enabled: audioTrack.enabled,
+          muted: audioTrack.muted,
+          readyState: audioTrack.readyState,
+          settings: audioTrack.getSettings(),
+        });
+      }
+      const videoTrack = cameraTrackRef.current;
+
+      rtcLog("attachOutgoingTracksAsAnswerer", {
+        sid,
+        hasAudioTrack: !!audioTrack,
+        audioTrackEnabled: audioTrack?.enabled,
+        audioTrackReadyState: audioTrack?.readyState,
+        hasVideoTrack: !!videoTrack,
+        transceiverCount: pc.getTransceivers().length,
+      });
+
+      const audioTransceiver = pc
+        .getTransceivers()
+        .find(
+          (t) =>
+            t.receiver.track?.kind === "audio"
+        );
+
+      if (!audioTransceiver) {
+        rtcLog("ERROR: no audio transceiver", {
+          sid,
+          transceivers: pc.getTransceivers().map((t) => ({
+            mid: t.mid,
+            direction: t.direction,
+            receiverKind: t.receiver.track?.kind,
+            senderKind: t.sender.track?.kind,
+          })),
+        });
+      } else {
+        audioTransceiver.direction = "sendrecv";
+
+        if (audioTrack) {
+          try {
+            await audioTransceiver.sender.replaceTrack(audioTrack);
+            const audioSender = audioTransceiver.sender;
+
+            const statsInterval = window.setInterval(async () => {
+              if (pc.connectionState === "closed") {
+                window.clearInterval(statsInterval);
+                return;
+              }
+
+              const stats = await pc.getStats(audioSender.track);
+
+              stats.forEach((report) => {
+                if (report.type === "outbound-rtp" && report.kind === "audio") {
+                  rtcLog("OUTBOUND AUDIO STATS", {
+                    sid,
+                    senderTrackId: audioSender.track?.id ?? null,
+                    trackEnabled: audioSender.track?.enabled ?? null,
+                    trackReadyState: audioSender.track?.readyState ?? null,
+                    bytesSent: report.bytesSent,
+                    packetsSent: report.packetsSent,
+                    audioLevel: report.audioLevel ?? null,
+                  });
+                }
+              });
+            }, 3000);
+            rtcLog("answerer audio attached BEFORE answer", {
               sid,
               trackId: audioTrack.id,
               enabled: audioTrack.enabled,
               readyState: audioTrack.readyState,
+              senderTrackId: audioTransceiver.sender.track?.id ?? null,
             });
-          })
-          .catch((err) => {
+          } catch (err) {
             rtcLog("answerer audio replaceTrack FAILED", {
               sid,
               error: String(err),
             });
-          });
+            throw err;
+          }
+        }
+
+        audioSendersRef.current[sid] = audioTransceiver.sender;
       }
 
-      audioSendersRef.current[sid] = audioTransceiver.sender;
-    }
+      const videoTransceiver = pc
+        .getTransceivers()
+        .find(
+          (t) =>
+            t.receiver.track?.kind === "video"
+        );
 
-    const videoTransceiver = pc
-      .getTransceivers()
-      .find(
-        (t) =>
-          t.receiver.track?.kind === "video"
-      );
+      if (videoTransceiver) {
+        videoTransceiver.direction = "sendrecv";
 
-    if (videoTransceiver) {
-      videoTransceiver.direction = "sendrecv";
-
-      if (videoTrack) {
-        videoTransceiver.sender
-          .replaceTrack(videoTrack)
-          .catch((err) => {
-            rtcLog("answerer video replaceTrack FAILED", {
-              sid,
-              error: String(err),
+        if (videoTrack) {
+          videoTransceiver.sender
+            .replaceTrack(videoTrack)
+            .catch((err) => {
+              rtcLog("answerer video replaceTrack FAILED", {
+                sid,
+                error: String(err),
+              });
             });
-          });
-      }
+        }
 
-      videoSendersRef.current[sid] = videoTransceiver.sender;
-    }
-  },
-  []
-);
+        videoSendersRef.current[sid] = videoTransceiver.sender;
+      }
+    },
+    []
+  );
 
   const closePeerConnection = useCallback((sid: string) => {
     peerConnections.current[sid]?.close();
@@ -409,11 +575,57 @@ export function useMeetingRoom({
         localStreamRef.current = stream;
         cameraTrackRef.current = stream.getVideoTracks()[0] ?? null;
         const audioTrack = stream.getAudioTracks()[0];
+        setLocalStream(stream);
+        if (audioTrack) {
+          const micDiagnosticContext = new AudioContext();
+          const micDiagnosticStream = new MediaStream([audioTrack]);
+          const micSource =
+            micDiagnosticContext.createMediaStreamSource(micDiagnosticStream);
+
+          const analyser = micDiagnosticContext.createAnalyser();
+          analyser.fftSize = 2048;
+
+          micSource.connect(analyser);
+
+          const data = new Float32Array(analyser.fftSize);
+
+          const diagnosticInterval = window.setInterval(() => {
+            if (audioTrack.readyState !== "live") {
+              window.clearInterval(diagnosticInterval);
+              return;
+            }
+
+            analyser.getFloatTimeDomainData(data);
+
+            let sum = 0;
+            let peak = 0;
+
+            for (const sample of data) {
+              sum += sample * sample;
+              peak = Math.max(peak, Math.abs(sample));
+            }
+
+            const rms = Math.sqrt(sum / data.length);
+
+            rtcLog("MIC SIGNAL DIAGNOSTIC", {
+              trackId: audioTrack.id,
+              enabled: audioTrack.enabled,
+              readyState: audioTrack.readyState,
+              rms,
+              peak,
+            });
+          }, 1000);
+        }
         if (audioTrack) audioTrack.enabled = initialMicOn;
         if (cameraTrackRef.current) cameraTrackRef.current.enabled = initialCameraOn;
+
         setLocalStream(stream);
+
+        // Start the separate audio capture pipeline for transcription/captions.
         stopAudioCaptureRef.current?.();
-        stopAudioCaptureRef.current = startAudioCapture(stream, activeRoomCode, socket);
+        stopAudioCaptureRef.current = audioTrack
+          ? startAudioCapture(stream, activeRoomCode, socket)
+          : null;
       }
 
       socket.connect();
@@ -472,11 +684,48 @@ export function useMeetingRoom({
               },
             }));
             const pc = createPeerConnection(peer.sid);
-            attachOutgoingTracksAsOfferer(peer.sid, pc);
+
+            await attachOutgoingTracksAsOfferer(peer.sid, pc);
+
+            // If we are already screen sharing when this participant joins,
+            // add the active screen track to this new peer BEFORE creating
+            // the initial offer.
+            if (
+              screenSharingRef.current &&
+              screenTrackRef.current &&
+              !screenSendersRef.current[peer.sid]
+            ) {
+              const screenTrack = screenTrackRef.current;
+
+              const screenTransceiver = pc.addTransceiver(screenTrack, {
+                direction: "sendrecv",
+              });
+
+              screenSendersRef.current[peer.sid] = screenTransceiver.sender;
+
+              rtcLog("late joiner: screen share attached", {
+                sid: peer.sid,
+                trackId: screenTrack.id,
+                readyState: screenTrack.readyState,
+                enabled: screenTrack.enabled,
+              });
+            }
+
             const offer = await pc.createOffer();
+
             await pc.setLocalDescription(offer);
-            rtcLog("sending offer", { to: peer.sid, sdpHasAudio: offer.sdp?.includes("m=audio") });
-            socket.emit("signal", { to: peer.sid, type: "offer", payload: pc.localDescription });
+
+            rtcLog("sending offer", {
+              to: peer.sid,
+              sdpHasAudio: offer.sdp?.includes("m=audio"),
+              sdpHasVideo: offer.sdp?.includes("m=video"),
+            });
+
+            socket.emit("signal", {
+              to: peer.sid,
+              type: "offer",
+              payload: pc.localDescription,
+            });
           }
         }
       );
@@ -510,7 +759,7 @@ export function useMeetingRoom({
             rtcLog("received offer", { from, sdpHasAudio: offerSdp?.includes("m=audio") });
             await pc.setRemoteDescription(new RTCSessionDescription(payload as RTCSessionDescriptionInit));
             logPeerState(from, pc);
-            attachOutgoingTracksAsAnswerer(from, pc);
+            await attachOutgoingTracksAsAnswerer(from, pc);
             if (screenSharingRef.current && screenTrackRef.current && !screenSendersRef.current[from]) {
               screenSendersRef.current[from] = pc.addTrack(screenTrackRef.current);
             }
@@ -676,7 +925,7 @@ export function useMeetingRoom({
       cameraTrackRef.current = null;
 
       Object.values(videoSendersRef.current).forEach((sender) => {
-        sender.replaceTrack(null).catch(() => {});
+        sender.replaceTrack(null).catch(() => { });
       });
 
       cameraOnRef.current = false;
@@ -705,7 +954,15 @@ export function useMeetingRoom({
       }
 
       Object.values(videoSendersRef.current).forEach((sender) => {
-        sender.replaceTrack(newTrack).catch(() => {});
+        sender.replaceTrack(newTrack).catch((err) => {
+          rtcLog("camera replaceTrack failed", {
+            error: String(err),
+          });
+        });
+
+        if (localStreamRef.current) {
+          sender.setStreams(localStreamRef.current);
+        }
       });
 
       cameraOnRef.current = true;
@@ -725,7 +982,7 @@ export function useMeetingRoom({
     setScreenStream(null);
 
     Object.values(screenSendersRef.current).forEach((sender) => {
-      sender.replaceTrack(null).catch(() => {});
+      sender.replaceTrack(null).catch(() => { });
     });
 
     setScreenSharing(false);
@@ -752,10 +1009,28 @@ export function useMeetingRoom({
       // — this needs a renegotiation round trip per peer connection.
       await Promise.all(
         Object.entries(peerConnections.current).map(async ([sid, pc]) => {
-          screenSendersRef.current[sid] = pc.addTrack(screenTrack);
+          if (pc.signalingState !== "stable") {
+            rtcLog("Skipping screen-share negotiation; peer not stable", {
+              sid,
+              signalingState: pc.signalingState,
+            });
+            return;
+          }
+
+          const screenTransceiver = pc.addTransceiver(screenTrack, {
+            direction: "sendrecv",
+          });
+
+          screenSendersRef.current[sid] = screenTransceiver.sender;
+
           const offer = await pc.createOffer();
           await pc.setLocalDescription(offer);
-          getSocket().emit("signal", { to: sid, type: "offer", payload: pc.localDescription });
+
+          getSocket().emit("signal", {
+            to: sid,
+            type: "offer",
+            payload: pc.localDescription,
+          });
         })
       );
 
@@ -793,3 +1068,16 @@ export function useMeetingRoom({
     toggleScreenShare,
   };
 }
+
+
+
+// 1. useMeetingRoom.ts
+// 2. VideoTile.tsx
+// 3. VideoGrid.tsx
+// 4. MeetingRoomPage.tsx
+// 5. PreJoinLobby.tsx
+// 6. useDevicePreview.ts
+// 7. Screen-share file (if separate)
+// 8. socket.ts
+// 9. Python Socket.IO server
+// 10. types / WebRTC utilities

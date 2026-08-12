@@ -46,9 +46,21 @@ export function useDevicePreview(enabled: boolean): UseDevicePreviewResult {
       let s: MediaStream | null = null;
       try {
         s = await navigator.mediaDevices.getUserMedia({ video: true, audio: AUDIO_CONSTRAINTS });
-      } catch {
-        try {
-          s = await navigator.mediaDevices.getUserMedia({ video: false, audio: AUDIO_CONSTRAINTS });
+      } catch (videoAudioErr) {
+  console.log("[rtc] PREJOIN VIDEO+MIC FAILED", {
+    name: videoAudioErr instanceof DOMException
+      ? videoAudioErr.name
+      : "unknown",
+    message: videoAudioErr instanceof Error
+      ? videoAudioErr.message
+      : String(videoAudioErr),
+  });
+
+  try {
+    s = await navigator.mediaDevices.getUserMedia({
+      video: false,
+      audio: AUDIO_CONSTRAINTS
+    });
         } catch {
           try {
             s = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
@@ -75,10 +87,34 @@ export function useDevicePreview(enabled: boolean): UseDevicePreviewResult {
       }
 
       streamRef.current = s;
-      setStream(s);
-      setMicOn((s?.getAudioTracks().length ?? 0) > 0);
-      setCameraOn((s?.getVideoTracks().length ?? 0) > 0);
-      setLoading(false);
+setStream(s);
+
+const audioTrack = s?.getAudioTracks()[0] ?? null;
+const videoTrack = s?.getVideoTracks()[0] ?? null;
+console.log("[rtc] PREJOIN MEDIA RESULT", {
+  streamExists: !!s,
+  streamId: s?.id ?? null,
+
+  audioTracks: s?.getAudioTracks().map((track) => ({
+    id: track.id,
+    enabled: track.enabled,
+    muted: track.muted,
+    readyState: track.readyState,
+    settings: track.getSettings(),
+  })),
+
+  videoTracks: s?.getVideoTracks().map((track) => ({
+    id: track.id,
+    enabled: track.enabled,
+    muted: track.muted,
+    readyState: track.readyState,
+    settings: track.getSettings(),
+  })),
+});
+setMicOn(audioTrack?.enabled ?? false);
+setCameraOn(videoTrack?.enabled ?? false);
+
+setLoading(false);
     }
 
     acquire();
@@ -108,21 +144,15 @@ export function useDevicePreview(enabled: boolean): UseDevicePreviewResult {
   const videoTrack = currentStream.getVideoTracks()[0];
 
   // CAMERA OFF
-  if (cameraOn) {
-    if (videoTrack) {
-      videoTrack.stop();
-
-      const audioTracks = currentStream.getAudioTracks();
-      const audioOnlyStream = new MediaStream(audioTracks);
-
-      // IMPORTANT: update BOTH references
-      streamRef.current = audioOnlyStream;
-      setStream(audioOnlyStream);
-    }
-
-    setCameraOn(false);
-    return;
+  // CAMERA OFF
+if (cameraOn) {
+  if (videoTrack) {
+    videoTrack.enabled = false;
   }
+
+  setCameraOn(false);
+  return;
+}
 
   // CAMERA ON
   try {

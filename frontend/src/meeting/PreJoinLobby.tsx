@@ -42,10 +42,26 @@ export function PreJoinLobby({ meetingTitle, roomCode, defaultName, defaultCapti
   }, [stream]);
 
   function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    const finalName = name.trim() || "Guest";
-    onJoin(finalName, release(), micOn, cameraOn, captionLanguage);
-  }
+  e.preventDefault();
+
+  const finalName = name.trim() || "Guest";
+  const joinStream = release();
+
+  // Use the actual microphone track state as the source of truth.
+  const actualMicOn =
+    joinStream?.getAudioTracks()[0]?.enabled ?? micOn;
+
+  const actualCameraOn =
+    joinStream?.getVideoTracks()[0]?.enabled ?? cameraOn;
+
+  onJoin(
+    finalName,
+    joinStream,
+    actualMicOn,
+    actualCameraOn,
+    captionLanguage
+  );
+}
 
   return (
     <div className="page-gradient min-h-screen flex flex-col relative overflow-hidden">
