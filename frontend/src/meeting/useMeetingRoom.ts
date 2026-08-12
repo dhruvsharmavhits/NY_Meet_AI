@@ -687,27 +687,18 @@ export function useMeetingRoom({
 
             await attachOutgoingTracksAsOfferer(peer.sid, pc);
 
-            // If we are already screen sharing when this participant joins,
-            // add the active screen track to this new peer BEFORE creating
-            // the initial offer.
-            if (
-              screenSharingRef.current &&
-              screenTrackRef.current &&
-              !screenSendersRef.current[peer.sid]
-            ) {
-              const screenTrack = screenTrackRef.current;
-
-              const screenTransceiver = pc.addTransceiver(screenTrack, {
-                direction: "sendrecv",
+            // If the EXISTING participant is currently sharing their screen,
+            // create a second video transceiver in our offer so the sharer
+            // can send the screen track to us.
+            if (peer.screen_sharing) {
+              const screenRecvTransceiver = pc.addTransceiver("video", {
+                direction: "recvonly",
               });
 
-              screenSendersRef.current[peer.sid] = screenTransceiver.sender;
-
-              rtcLog("late joiner: screen share attached", {
+              rtcLog("late joiner: requesting existing screen share", {
                 sid: peer.sid,
-                trackId: screenTrack.id,
-                readyState: screenTrack.readyState,
-                enabled: screenTrack.enabled,
+                transceiverIndex: pc.getTransceivers().indexOf(screenRecvTransceiver),
+                direction: screenRecvTransceiver.direction,
               });
             }
 
@@ -719,6 +710,10 @@ export function useMeetingRoom({
               to: peer.sid,
               sdpHasAudio: offer.sdp?.includes("m=audio"),
               sdpHasVideo: offer.sdp?.includes("m=video"),
+              videoTransceivers: pc
+                .getTransceivers()
+                .filter((t) => t.receiver.track?.kind === "video")
+                .length,
             });
 
             socket.emit("signal", {
@@ -760,9 +755,52 @@ export function useMeetingRoom({
             await pc.setRemoteDescription(new RTCSessionDescription(payload as RTCSessionDescriptionInit));
             logPeerState(from, pc);
             await attachOutgoingTracksAsAnswerer(from, pc);
-            if (screenSharingRef.current && screenTrackRef.current && !screenSendersRef.current[from]) {
-              screenSendersRef.current[from] = pc.addTrack(screenTrackRef.current);
-            }
+
+// If WE are currently sharing our screen, attach the screen track
+// to the SECOND negotiated video transceiver.
+//
+// The first video transceiver is the camera.
+// The second video transceiver is the screen share requested
+// by the late joiner.
+if (screenSharingRef.current && screenTrackRef.current) {
+  const videoTransceivers = pc
+    .getTransceivers()
+    .filter(
+      (t) =>
+        t.receiver.track?.kind === "video"
+    );
+
+  const screenTransceiver = videoTransceivers[1];
+
+  if (screenTransceiver) {
+    screenTransceiver.direction = "sendrecv";
+
+    await screenTransceiver.sender.replaceTrack(
+      screenTrackRef.current
+    );
+
+    screenSendersRef.current[from] = screenTransceiver.sender;
+
+    rtcLog("late joiner: screen attached to negotiated transceiver", {
+      sid: from,
+      transceiverIndex: 1,
+      trackId: screenTrackRef.current.id,
+      readyState: screenTrackRef.current.readyState,
+      direction: screenTransceiver.direction,
+    });
+  } else {
+    rtcLog("ERROR: late joiner requested screen but no screen transceiver exists", {
+      sid: from,
+      videoTransceivers: videoTransceivers.length,
+      transceivers: pc.getTransceivers().map((t) => ({
+        mid: t.mid,
+        direction: t.direction,
+        senderKind: t.sender.track?.kind ?? null,
+        receiverKind: t.receiver.track?.kind ?? null,
+      })),
+    });
+  }
+}
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
             rtcLog("sending answer", { to: from, sdpHasAudio: answer.sdp?.includes("m=audio") });
