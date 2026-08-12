@@ -79,28 +79,28 @@ export function VideoTile({
 
     video.srcObject = videoStream;
 
-    console.log(
-      `[rtc] VideoTile video srcObject set ${JSON.stringify({
-        label,
-        streamId: stream?.id ?? null,
-        videoTracks: videoTracks.map((track) => ({
-          id: track.id,
-          readyState: track.readyState,
-          enabled: track.enabled,
-          muted: track.muted,
-        })),
-        localMuted: muted,
-      })}`
-    );
+    // console.log(
+    //   `[rtc] VideoTile video srcObject set ${JSON.stringify({
+    //     label,
+    //     streamId: stream?.id ?? null,
+    //     videoTracks: videoTracks.map((track) => ({
+    //       id: track.id,
+    //       readyState: track.readyState,
+    //       enabled: track.enabled,
+    //       muted: track.muted,
+    //     })),
+    //     localMuted: muted,
+    //   })}`
+    // );
 
     if (videoStream) {
       video.play().catch((err) => {
-        console.log(
-          `[rtc] VideoTile video play rejected ${JSON.stringify({
-            label,
-            error: String(err),
-          })}`
-        );
+        // console.log(
+        //   `[rtc] VideoTile video play rejected ${JSON.stringify({
+        //     label,
+        //     error: String(err),
+        //   })}`
+        // );
       });
     }
 
@@ -130,11 +130,11 @@ export function VideoTile({
       audio.pause();
       audio.srcObject = null;
 
-      console.log(
-        `[rtc] VideoTile local audio disabled ${JSON.stringify({
-          label,
-        })}`
-      );
+      // console.log(
+      //   `[rtc] VideoTile local audio disabled ${JSON.stringify({
+      //     label,
+      //   })}`
+      // );
 
       return;
     }
@@ -148,18 +148,18 @@ export function VideoTile({
 
     audio.srcObject = audioStream;
 
-    console.log(
-      `[rtc] VideoTile audio srcObject set ${JSON.stringify({
-        label,
-        streamId: stream?.id ?? null,
-        audioTracks: audioTracks.map((track) => ({
-          id: track.id,
-          readyState: track.readyState,
-          enabled: track.enabled,
-          muted: track.muted,
-        })),
-      })}`
-    );
+    // console.log(
+    //   `[rtc] VideoTile audio srcObject set ${JSON.stringify({
+    //     label,
+    //     streamId: stream?.id ?? null,
+    //     audioTracks: audioTracks.map((track) => ({
+    //       id: track.id,
+    //       readyState: track.readyState,
+    //       enabled: track.enabled,
+    //       muted: track.muted,
+    //     })),
+    //   })}`
+    // );
 
     if (!audioStream) {
       audio.pause();
@@ -173,13 +173,13 @@ export function VideoTile({
       try {
         await audio.play();
 
-        console.log(
-          `[rtc] 🔊 VideoTile remote audio PLAYING ${JSON.stringify({
-            label,
-            streamId: stream?.id ?? null,
-            audioTracks: audioStream.getAudioTracks().length,
-          })}`
-        );
+        // console.log(
+        //   `[rtc] 🔊 VideoTile remote audio PLAYING ${JSON.stringify({
+        //     label,
+        //     streamId: stream?.id ?? null,
+        //     audioTracks: audioStream.getAudioTracks().length,
+        //   })}`
+        // );
       } catch (err) {
         console.error(
           `[rtc] ❌ VideoTile remote audio PLAY FAILED`,

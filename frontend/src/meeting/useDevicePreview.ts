@@ -47,15 +47,7 @@ export function useDevicePreview(enabled: boolean): UseDevicePreviewResult {
       try {
         s = await navigator.mediaDevices.getUserMedia({ video: true, audio: AUDIO_CONSTRAINTS });
       } catch (videoAudioErr) {
-  console.log("[rtc] PREJOIN VIDEO+MIC FAILED", {
-    name: videoAudioErr instanceof DOMException
-      ? videoAudioErr.name
-      : "unknown",
-    message: videoAudioErr instanceof Error
-      ? videoAudioErr.message
-      : String(videoAudioErr),
-  });
-
+  
   try {
     s = await navigator.mediaDevices.getUserMedia({
       video: false,
@@ -91,26 +83,6 @@ setStream(s);
 
 const audioTrack = s?.getAudioTracks()[0] ?? null;
 const videoTrack = s?.getVideoTracks()[0] ?? null;
-console.log("[rtc] PREJOIN MEDIA RESULT", {
-  streamExists: !!s,
-  streamId: s?.id ?? null,
-
-  audioTracks: s?.getAudioTracks().map((track) => ({
-    id: track.id,
-    enabled: track.enabled,
-    muted: track.muted,
-    readyState: track.readyState,
-    settings: track.getSettings(),
-  })),
-
-  videoTracks: s?.getVideoTracks().map((track) => ({
-    id: track.id,
-    enabled: track.enabled,
-    muted: track.muted,
-    readyState: track.readyState,
-    settings: track.getSettings(),
-  })),
-});
 setMicOn(audioTrack?.enabled ?? false);
 setCameraOn(videoTrack?.enabled ?? false);
 

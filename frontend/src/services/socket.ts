@@ -34,11 +34,11 @@ export function getSocket(): Socket {
   });
 
   socket.on("connect", () => {
-    console.log("✅ Socket Connected:", socket?.id);
+    // console.log("✅ Socket Connected:", socket?.id);
   });
 
   socket.on("disconnect", (reason) => {
-    console.log("❌ Socket Disconnected:", reason);
+    // console.log("❌ Socket Disconnected:", reason);
   });
 
   socket.on("connect_error", (err) => {
