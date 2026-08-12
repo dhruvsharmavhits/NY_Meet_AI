@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import Meeting, MeetingParticipant, MeetingStatus, TranscriptEntry, User
-from app.schemas.meeting import CreateMeetingRequest, MeetingResponse
+from app.schemas.meeting import CreateMeetingRequest, MeetingResponse, UpdateMeetingRequest
 from app.schemas.transcript import MeetingSummaryResponse, TranscriptEntryResponse
 from app.storage.local_storage import get_file_path, list_files, save_file
 from app.users.dependencies import get_current_user
@@ -60,6 +60,22 @@ def get_meeting(
     db: Session = Depends(get_db),
 ) -> Meeting:
     return _get_meeting_or_404(room_code, db)
+
+
+@router.patch("/{room_code}", response_model=MeetingResponse)
+def update_meeting(
+    room_code: str,
+    payload: UpdateMeetingRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Meeting:
+    meeting = _get_meeting_or_404(room_code, db)
+    if meeting.host_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the host can rename this meeting")
+    meeting.title = payload.title
+    db.commit()
+    db.refresh(meeting)
+    return meeting
 
 
 @router.post("/{room_code}/join", response_model=MeetingResponse)

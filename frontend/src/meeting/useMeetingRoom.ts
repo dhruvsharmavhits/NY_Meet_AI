@@ -486,7 +486,7 @@ if (screenSharingRef.current && screenTrackRef.current) {
       });
 
       socket.on("screen-share-state", (data: { sid: string; sharing: boolean }) => {
-        setParticipants((prev) => {
+        setParticipants((prev) => { 
           const p = prev[data.sid];
           if (!p) return prev;
           return { ...prev, [data.sid]: { ...p, screenSharing: data.sharing } };

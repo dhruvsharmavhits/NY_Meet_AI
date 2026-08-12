@@ -10,6 +10,10 @@ class CreateMeetingRequest(BaseModel):
     scheduled_at: datetime | None = None
 
 
+class UpdateMeetingRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+
+
 class MeetingResponse(BaseModel):
     id: str
     room_code: str

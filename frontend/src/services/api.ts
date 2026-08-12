@@ -76,6 +76,11 @@ export async function getMeeting(roomCode: string): Promise<Meeting> {
   return data;
 }
 
+export async function updateMeetingTitle(roomCode: string, title: string): Promise<Meeting> {
+  const { data } = await api.patch<Meeting>(`/meetings/${roomCode}`, { title });
+  return data;
+}
+
 export async function joinMeeting(roomCode: string): Promise<Meeting> {
   const { data } = await api.post<Meeting>(`/meetings/${roomCode}/join`);
   return data;

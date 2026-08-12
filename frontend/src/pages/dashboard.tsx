@@ -1,11 +1,17 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, MouseEvent, useState } from "react";
 import { useRouter } from "next/router";
 import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { createMeeting, listMeetings } from "@/services/api";
+import { createMeeting, listMeetings, fetchTranscript, updateMeetingTitle } from "@/services/api";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { NamePrompt } from "@/components/NamePrompt";
-import { LinguaMeetLogo, VideoCallIcon, KeyboardIcon, SettingsIcon } from "@/components/Icons";
+import { LinguaMeetLogo, VideoCallIcon, KeyboardIcon, SettingsIcon, DownloadIcon, EditIcon } from "@/components/Icons";
+
+interface TitleModalState {
+  mode: "create" | "rename";
+  roomCode?: string;
+  value: string;
+}
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -14,7 +20,11 @@ export default function DashboardPage() {
 
   const [joinCode, setJoinCode] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
+  const [downloadingCode, setDownloadingCode] = useState<string | null>(null);
+  const [downloadErrorCode, setDownloadErrorCode] = useState<string | null>(null);
+  const [titleModal, setTitleModal] = useState<TitleModalState | null>(null);
+  const [savingTitle, setSavingTitle] = useState(false);
+  const [titleError, setTitleError] = useState<string | null>(null);
 
   const { data: meetings } = useQuery({
     queryKey: ["meetings"],
@@ -22,16 +32,56 @@ export default function DashboardPage() {
     enabled: !!user,
   });
 
-  async function handleNewMeeting() {
-    setError(null);
-    setCreating(true);
+  async function handleTitleModalSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!titleModal) return;
+    const title = titleModal.value.trim();
+    if (!title) return;
+    setTitleError(null);
+    setSavingTitle(true);
     try {
-      const meeting = await createMeeting("Untitled meeting");
-      queryClient.invalidateQueries({ queryKey: ["meetings"] });
-      router.push(`/meeting/${meeting.room_code}`);
+      if (titleModal.mode === "create") {
+        const meeting = await createMeeting(title);
+        queryClient.invalidateQueries({ queryKey: ["meetings"] });
+        setTitleModal(null);
+        router.push(`/meeting/${meeting.room_code}`);
+      } else if (titleModal.roomCode) {
+        await updateMeetingTitle(titleModal.roomCode, title);
+        queryClient.invalidateQueries({ queryKey: ["meetings"] });
+        setTitleModal(null);
+      }
     } catch {
-      setError("Could not create meeting");
-      setCreating(false);
+      setTitleError(titleModal.mode === "create" ? "Could not create meeting" : "Could not rename meeting");
+    } finally {
+      setSavingTitle(false);
+    }
+  }
+
+  async function handleDownloadTranscript(e: MouseEvent, roomCode: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    setDownloadErrorCode(null);
+    setDownloadingCode(roomCode);
+    try {
+      const entries = await fetchTranscript(roomCode);
+      if (entries.length === 0) {
+        setDownloadErrorCode(roomCode);
+        return;
+      }
+      const lines = entries.map(
+        (entry) => `[${new Date(entry.created_at).toLocaleTimeString()}] ${entry.speaker_name} (${entry.lang}): ${entry.text}`
+      );
+      const blob = new Blob([lines.join("\n")], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `transcript-${roomCode}.txt`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      setDownloadErrorCode(roomCode);
+    } finally {
+      setDownloadingCode(null);
     }
   }
 
@@ -121,12 +171,14 @@ export default function DashboardPage() {
             <div className="mt-10 flex flex-col gap-4 sm:flex-row sm:items-center">
               <button
                 id="new-meeting-button"
-                onClick={handleNewMeeting}
-                disabled={creating}
+                onClick={() => {
+                  setTitleError(null);
+                  setTitleModal({ mode: "create", value: "Untitled meeting" });
+                }}
                 className="btn-gradient flex items-center justify-center gap-3 rounded-2xl px-8 py-4 text-base"
               >
                 <VideoCallIcon size={22} />
-                {creating ? "Creating..." : "New meeting"}
+                New meeting
               </button>
 
               <form onSubmit={handleJoin} className="flex items-center gap-2">
@@ -189,11 +241,16 @@ export default function DashboardPage() {
             </h2>
             <div className="glass-card overflow-hidden rounded-3xl">
               {meetings.map((m, idx) => (
-                <Link
+                <div
                   key={m.id}
-                  href={`/meeting/${m.room_code}`}
                   id={`meeting-${m.room_code}`}
-                  className={`flex items-center justify-between px-6 py-5 hover:bg-white/40 transition-all duration-200 ${
+                  onClick={() => router.push(`/meeting/${m.room_code}`)}
+                  role="link"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") router.push(`/meeting/${m.room_code}`);
+                  }}
+                  className={`flex cursor-pointer items-center justify-between px-6 py-5 hover:bg-white/40 transition-all duration-200 ${
                     idx !== meetings.length - 1 ? "border-b border-black/5" : ""
                   }`}
                 >
@@ -207,24 +264,119 @@ export default function DashboardPage() {
                     <div>
                       <p className="text-sm font-semibold text-[#1a1a2e]">{m.title}</p>
                       <p className="text-xs text-[#94a3b8] font-medium">{m.room_code}</p>
+                      {downloadErrorCode === m.room_code && (
+                        <p className="mt-0.5 text-xs font-medium text-[#ea4335]">
+                          No transcript available
+                        </p>
+                      )}
                     </div>
                   </div>
-                  <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${
-                    m.status === "active"
-                      ? "bg-[#0f9d58]/10 text-[#0f9d58]"
-                      : "bg-[#64748b]/10 text-[#64748b]"
-                  }`}>
-                    {m.status === "active" && (
-                      <span className="mr-1.5 h-1.5 w-1.5 rounded-full bg-[#0f9d58] animate-pulse" />
-                    )}
-                    {m.status}
-                  </span>
-                </Link>
+                  <div className="flex items-center gap-3">
+                    <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${
+                      m.status === "active"
+                        ? "bg-[#0f9d58]/10 text-[#0f9d58]"
+                        : "bg-[#64748b]/10 text-[#64748b]"
+                    }`}>
+                      {m.status === "active" && (
+                        <span className="mr-1.5 h-1.5 w-1.5 rounded-full bg-[#0f9d58] animate-pulse" />
+                      )}
+                      {m.status}
+                    </span>
+                    <button
+                      id={`rename-meeting-${m.room_code}`}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setTitleError(null);
+                        setTitleModal({ mode: "rename", roomCode: m.room_code, value: m.title });
+                      }}
+                      aria-label={`Rename ${m.title}`}
+                      title="Rename meeting"
+                      className="flex h-9 w-9 items-center justify-center rounded-xl text-[#64748b] hover:bg-black/5 hover:text-[#4285f4] transition-all duration-200"
+                    >
+                      <EditIcon size={16} />
+                    </button>
+                    <button
+                      id={`download-transcript-${m.room_code}`}
+                      onClick={(e) => handleDownloadTranscript(e, m.room_code)}
+                      disabled={downloadingCode === m.room_code}
+                      aria-label={`Download transcript for ${m.title}`}
+                      title="Download transcript"
+                      className="flex h-9 w-9 items-center justify-center rounded-xl text-[#64748b] hover:bg-black/5 hover:text-[#4285f4] disabled:opacity-40 transition-all duration-200"
+                    >
+                      {downloadingCode === m.room_code ? (
+                        <span
+                          className="block h-4 w-4 rounded-full"
+                          style={{
+                            border: "2px solid rgba(66, 133, 244, 0.15)",
+                            borderTopColor: "#4285f4",
+                            animation: "meet-spin 0.8s linear infinite",
+                          }}
+                        />
+                      ) : (
+                        <DownloadIcon size={18} />
+                      )}
+                    </button>
+                  </div>
+                </div>
               ))}
             </div>
           </section>
         )}
       </main>
+
+      {titleModal && (
+        <div
+          className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => !savingTitle && setTitleModal(null)}
+        >
+          <div
+            className="glass-card w-full max-w-[420px] rounded-3xl px-8 py-8 animate-meet-scale-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-lg font-bold text-[#1a1a2e]">
+              {titleModal.mode === "create" ? "New meeting" : "Rename meeting"}
+            </h2>
+
+            {titleError && (
+              <div className="mt-4 flex items-center gap-2 rounded-2xl bg-[#ea4335]/8 px-4 py-3 text-sm text-[#ea4335]">
+                {titleError}
+              </div>
+            )}
+
+            <form onSubmit={handleTitleModalSubmit} className="mt-5">
+              <input
+                id="meeting-title-input"
+                required
+                autoFocus
+                value={titleModal.value}
+                onChange={(e) => setTitleModal({ ...titleModal, value: e.target.value })}
+                placeholder="Meeting title"
+                className="input-modern w-full"
+              />
+
+              <div className="mt-6 flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setTitleModal(null)}
+                  disabled={savingTitle}
+                  className="rounded-xl px-5 py-3 text-sm font-semibold text-[#64748b] hover:bg-black/5 transition-all duration-200"
+                >
+                  Cancel
+                </button>
+                <button
+                  id="save-meeting-title"
+                  type="submit"
+                  disabled={savingTitle || !titleModal.value.trim()}
+                  className="btn-gradient rounded-xl px-6 py-3 text-sm"
+                >
+                  {savingTitle ? "Saving..." : titleModal.mode === "create" ? "Create" : "Save"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
