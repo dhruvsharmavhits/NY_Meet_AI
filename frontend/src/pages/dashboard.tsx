@@ -188,7 +188,7 @@ export default function DashboardPage() {
                     id="join-code-input"
                     value={joinCode}
                     onChange={(e) => setJoinCode(e.target.value)}
-                    placeholder="Enter a code or link"
+                    placeholder="Enter a code"
                     className="input-modern w-[230px] pl-11"
                   />
                 </div>
