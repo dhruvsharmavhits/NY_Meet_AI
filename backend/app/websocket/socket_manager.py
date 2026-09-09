@@ -184,7 +184,19 @@ async def screen_share_state(sid, data):
     participants = rooms.get(room_code, {})
     if sid not in participants:
         return
-    participants[sid]["screen_sharing"] = data.get("sharing", False)
+    sharing = data.get("sharing", False)
+
+    if sharing:
+        # only one screen share at a time — anyone else currently sharing
+        # gets force-stopped (only their own client can actually stop their
+        # capture, so we tell them to instead of trying to do it ourselves)
+        for other_sid, other in participants.items():
+            if other_sid != sid and other.get("screen_sharing"):
+                other["screen_sharing"] = False
+                await sio.emit("force-stop-screen-share", {}, room=other_sid)
+                await sio.emit("screen-share-state", {"sid": other_sid, "sharing": False}, room=room_code)
+
+    participants[sid]["screen_sharing"] = sharing
     await sio.emit(
         "screen-share-state",
         {"sid": sid, "sharing": participants[sid]["screen_sharing"]},

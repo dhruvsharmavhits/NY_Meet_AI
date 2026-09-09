@@ -80,6 +80,7 @@ export function useMeetingRoom({
   const micOnRef = useRef(initialMicOn);
   const cameraOnRef = useRef(initialCameraOn);
   const stopAudioCaptureRef = useRef<(() => void) | null>(null);
+  const stopScreenShareRef = useRef<(() => void) | null>(null);
   const everConnectedRef = useRef(false);
   const consultationEndedRef = useRef(false);
   const localIceCandidateCountsRef = useRef<Record<string, number>>({});
@@ -509,11 +510,17 @@ if (screenSharingRef.current && screenTrackRef.current) {
       });
 
       socket.on("screen-share-state", (data: { sid: string; sharing: boolean }) => {
-        setParticipants((prev) => { 
+        setParticipants((prev) => {
           const p = prev[data.sid];
           if (!p) return prev;
           return { ...prev, [data.sid]: { ...p, screenSharing: data.sharing } };
         });
+      });
+
+      // only one person can share at a time — the server tells us when
+      // someone else started sharing while we were already sharing
+      socket.on("force-stop-screen-share", () => {
+        stopScreenShareRef.current?.();
       });
     }
 
@@ -537,6 +544,7 @@ if (screenSharingRef.current && screenTrackRef.current) {
       socket.off("partial-transcript");
       socket.off("media-state");
       socket.off("screen-share-state");
+      socket.off("force-stop-screen-share");
       disconnectSocket();
 
       stopAudioCaptureRef.current?.();
@@ -703,6 +711,7 @@ if (screenSharingRef.current && screenTrackRef.current) {
       getSocket().emit("screen-share-state", { room_code: roomCode, sharing: false });
     }
   }, [roomCode]);
+  stopScreenShareRef.current = stopScreenShare;
 
   const toggleScreenShare = useCallback(async () => {
     if (screenSharingRef.current) {
