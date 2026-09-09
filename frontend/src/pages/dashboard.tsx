@@ -2,7 +2,7 @@ import { FormEvent, MouseEvent, useState } from "react";
 import { useRouter } from "next/router";
 import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { createMeeting, listMeetings, fetchTranscript, updateMeetingTitle } from "@/services/api";
+import { createMeeting, listMeetings, fetchTranscript, updateMeetingTitle, listRecordings, downloadRecording } from "@/services/api";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { NamePrompt } from "@/components/NamePrompt";
 import { LinguaMeetLogo, VideoCallIcon, KeyboardIcon, SettingsIcon, DownloadIcon, EditIcon } from "@/components/Icons";
@@ -22,6 +22,8 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [downloadingCode, setDownloadingCode] = useState<string | null>(null);
   const [downloadErrorCode, setDownloadErrorCode] = useState<string | null>(null);
+  const [downloadingRecCode, setDownloadingRecCode] = useState<string | null>(null);
+  const [recErrorCode, setRecErrorCode] = useState<string | null>(null);
   const [titleModal, setTitleModal] = useState<TitleModalState | null>(null);
   const [savingTitle, setSavingTitle] = useState(false);
   const [titleError, setTitleError] = useState<string | null>(null);
@@ -82,6 +84,25 @@ export default function DashboardPage() {
       setDownloadErrorCode(roomCode);
     } finally {
       setDownloadingCode(null);
+    }
+  }
+
+  async function handleDownloadRecording(e: MouseEvent, roomCode: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    setRecErrorCode(null);
+    setDownloadingRecCode(roomCode);
+    try {
+      const files = await listRecordings(roomCode);
+      if (files.length === 0) {
+        setRecErrorCode(roomCode);
+        return;
+      }
+      await downloadRecording(roomCode, files[files.length - 1]);
+    } catch {
+      setRecErrorCode(roomCode);
+    } finally {
+      setDownloadingRecCode(null);
     }
   }
 
@@ -269,6 +290,11 @@ export default function DashboardPage() {
                           No transcript available
                         </p>
                       )}
+                      {recErrorCode === m.room_code && (
+                        <p className="mt-0.5 text-xs font-medium text-[#ea4335]">
+                          No recording available
+                        </p>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
@@ -295,6 +321,27 @@ export default function DashboardPage() {
                       className="flex h-9 w-9 items-center justify-center rounded-xl text-[#64748b] hover:bg-black/5 hover:text-[#4285f4] transition-all duration-200"
                     >
                       <EditIcon size={16} />
+                    </button>
+                    <button
+                      id={`download-recording-${m.room_code}`}
+                      onClick={(e) => handleDownloadRecording(e, m.room_code)}
+                      disabled={downloadingRecCode === m.room_code}
+                      aria-label={`Download recording for ${m.title}`}
+                      title="Download recording"
+                      className="flex h-9 w-9 items-center justify-center rounded-xl text-[#64748b] hover:bg-black/5 hover:text-[#4285f4] disabled:opacity-40 transition-all duration-200"
+                    >
+                      {downloadingRecCode === m.room_code ? (
+                        <span
+                          className="block h-4 w-4 rounded-full"
+                          style={{
+                            border: "2px solid rgba(66, 133, 244, 0.15)",
+                            borderTopColor: "#4285f4",
+                            animation: "meet-spin 0.8s linear infinite",
+                          }}
+                        />
+                      ) : (
+                        <DownloadIcon size={18} />
+                      )}
                     </button>
                     <button
                       id={`download-transcript-${m.room_code}`}

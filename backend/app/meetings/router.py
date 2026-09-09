@@ -197,7 +197,7 @@ async def upload_recording(
     meeting = _get_meeting_or_404(room_code, db)
     data = await file.read()
     filename = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}.webm"
-    save_file(f"recordings/{meeting.id}", filename, data)
+    save_file(f"meeting-recording/{meeting.id}", filename, data)
     return {"filename": filename}
 
 
@@ -208,7 +208,7 @@ def list_recordings(
     db: Session = Depends(get_db),
 ) -> list[str]:
     meeting = _get_meeting_or_404(room_code, db)
-    return list_files(f"recordings/{meeting.id}")
+    return list_files(f"meeting-recording/{meeting.id}")
 
 
 @router.get("/{room_code}/recordings/{filename}")
@@ -219,7 +219,7 @@ def download_recording(
     db: Session = Depends(get_db),
 ) -> FileResponse:
     meeting = _get_meeting_or_404(room_code, db)
-    file_path = get_file_path(f"recordings/{meeting.id}", filename)
+    file_path = get_file_path(f"meeting-recording/{meeting.id}", filename)
     if file_path is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found")
     return FileResponse(file_path, media_type="video/webm", filename=filename)

@@ -109,6 +109,20 @@ export default function MeetingRoomPage() {
   });
 
   const { recording, start: startRecording, stop: stopRecording } = useRecorder({ localStream, remoteStreams });
+  const recordingRef = useRef(recording);
+  recordingRef.current = recording;
+  const roomCodeRef = useRef(roomCode);
+  roomCodeRef.current = roomCode;
+
+  useEffect(() => {
+    return () => {
+      if (recordingRef.current) {
+        stopRecording().then((blob) => {
+          if (blob && roomCodeRef.current) uploadRecording(roomCodeRef.current, blob).catch(() => {});
+        });
+      }
+    };
+  }, [stopRecording]);
 
   async function handleLobbyJoin(name: string, stream: MediaStream | null, micOnAtJoin: boolean, cameraOnAtJoin: boolean, captionLanguage: string) {
     setDisplayName(name);
@@ -159,7 +173,7 @@ export default function MeetingRoomPage() {
       }
     } else {
       try {
-        startRecording();
+        await startRecording();
       } catch {
         setRecordingError("Could not start recording.");
       }
@@ -167,6 +181,16 @@ export default function MeetingRoomPage() {
   }
 
   async function handleLeave() {
+    if (recording) {
+      const blob = await stopRecording();
+      if (blob && roomCode) {
+        try {
+          await uploadRecording(roomCode, blob);
+        } catch {
+          // best-effort
+        }
+      }
+    }
     if (roomCode) {
       try {
         await leaveMeeting(roomCode);

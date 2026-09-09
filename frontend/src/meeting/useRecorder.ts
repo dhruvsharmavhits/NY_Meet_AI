@@ -10,66 +10,28 @@ export function useRecorder({ localStream, remoteStreams }: UseRecorderOptions) 
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
-  const rafRef = useRef<number | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
-  const hiddenVideosRef = useRef<HTMLVideoElement[]>([]);
+  const displayStreamRef = useRef<MediaStream | null>(null);
 
-  const start = useCallback(() => {
-    const streams = [localStream, ...Object.values(remoteStreams)].filter(
-      (s): s is MediaStream => s !== null
-    );
-    if (streams.length === 0) return;
-
-    const canvas = document.createElement("canvas");
-    canvas.width = 1280;
-    canvas.height = 720;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    const videos = streams.map((s) => {
-      const v = document.createElement("video");
-      v.srcObject = s;
-      v.muted = true;
-      v.playsInline = true;
-      v.play().catch(() => {});
-      return v;
+  const start = useCallback(async () => {
+    const displayStream = await navigator.mediaDevices.getDisplayMedia({
+      video: { frameRate: 30 },
+      audio: true,
     });
-    hiddenVideosRef.current = videos;
-
-    function draw() {
-      if (!ctx) return;
-      ctx.fillStyle = "#111827";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      const cols = Math.ceil(Math.sqrt(videos.length));
-      const rows = Math.ceil(videos.length / cols);
-      const cellW = canvas.width / cols;
-      const cellH = canvas.height / rows;
-
-      videos.forEach((v, i) => {
-        if (v.readyState >= 2) {
-          const x = (i % cols) * cellW;
-          const y = Math.floor(i / cols) * cellH;
-          ctx.drawImage(v, x, y, cellW, cellH);
-        }
-      });
-
-      rafRef.current = requestAnimationFrame(draw);
-    }
-    draw();
+    displayStreamRef.current = displayStream;
 
     const audioContext = new AudioContext();
     audioContextRef.current = audioContext;
     const destination = audioContext.createMediaStreamDestination();
-    streams.forEach((s) => {
-      if (s.getAudioTracks().length > 0) {
+
+    [localStream, ...Object.values(remoteStreams), displayStream].forEach((s) => {
+      if (s && s.getAudioTracks().length > 0) {
         audioContext.createMediaStreamSource(s).connect(destination);
       }
     });
 
-    const canvasStream = canvas.captureStream(30);
     const combined = new MediaStream([
-      ...canvasStream.getVideoTracks(),
+      ...displayStream.getVideoTracks(),
       ...destination.stream.getAudioTracks(),
     ]);
 
@@ -81,6 +43,10 @@ export function useRecorder({ localStream, remoteStreams }: UseRecorderOptions) 
     recorder.start(1000);
     mediaRecorderRef.current = recorder;
     setRecording(true);
+
+    displayStream.getVideoTracks()[0].onended = () => {
+      recorder.stop();
+    };
   }, [localStream, remoteStreams]);
 
   const stop = useCallback((): Promise<Blob | null> => {
@@ -93,15 +59,10 @@ export function useRecorder({ localStream, remoteStreams }: UseRecorderOptions) 
       recorder.onstop = () => {
         const blob = new Blob(chunksRef.current, { type: "video/webm" });
         chunksRef.current = [];
-        if (rafRef.current) cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
         audioContextRef.current?.close();
         audioContextRef.current = null;
-        hiddenVideosRef.current.forEach((v) => {
-          v.pause();
-          v.srcObject = null;
-        });
-        hiddenVideosRef.current = [];
+        displayStreamRef.current?.getTracks().forEach((t) => t.stop());
+        displayStreamRef.current = null;
         mediaRecorderRef.current = null;
         setRecording(false);
         resolve(blob);
