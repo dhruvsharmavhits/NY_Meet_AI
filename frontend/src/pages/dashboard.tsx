@@ -1,15 +1,14 @@
-import { FormEvent, MouseEvent, useState } from "react";
+import { FormEvent, MouseEvent, useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { createMeeting, listMeetings, fetchTranscript, updateMeetingTitle, listRecordings, downloadRecording } from "@/services/api";
+import { fetchTranscript, listMeetings, listRecordings, downloadRecording, updateMeetingTitle } from "@/services/api";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { NamePrompt } from "@/components/NamePrompt";
-import { LinguaMeetLogo, VideoCallIcon, KeyboardIcon, SettingsIcon, DownloadIcon, EditIcon } from "@/components/Icons";
+import { LinguaMeetLogo, VideoCallIcon, SettingsIcon, DownloadIcon, EditIcon } from "@/components/Icons";
 
-interface TitleModalState {
-  mode: "create" | "rename";
-  roomCode?: string;
+interface RenameModalState {
+  roomCode: string;
   value: string;
 }
 
@@ -18,15 +17,19 @@ export default function DashboardPage() {
   const { user, loading, register } = useCurrentUser();
   const queryClient = useQueryClient();
 
-  const [joinCode, setJoinCode] = useState("");
-  const [error, setError] = useState<string | null>(null);
   const [downloadingCode, setDownloadingCode] = useState<string | null>(null);
   const [downloadErrorCode, setDownloadErrorCode] = useState<string | null>(null);
   const [downloadingRecCode, setDownloadingRecCode] = useState<string | null>(null);
   const [recErrorCode, setRecErrorCode] = useState<string | null>(null);
-  const [titleModal, setTitleModal] = useState<TitleModalState | null>(null);
+  const [renameModal, setRenameModal] = useState<RenameModalState | null>(null);
   const [savingTitle, setSavingTitle] = useState(false);
   const [titleError, setTitleError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (localStorage.getItem("admin_token")) {
+      router.replace("/admin");
+    }
+  }, [router]);
 
   const { data: meetings } = useQuery({
     queryKey: ["meetings"],
@@ -34,26 +37,19 @@ export default function DashboardPage() {
     enabled: !!user,
   });
 
-  async function handleTitleModalSubmit(e: FormEvent) {
+  async function handleRenameSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!titleModal) return;
-    const title = titleModal.value.trim();
+    if (!renameModal) return;
+    const title = renameModal.value.trim();
     if (!title) return;
     setTitleError(null);
     setSavingTitle(true);
     try {
-      if (titleModal.mode === "create") {
-        const meeting = await createMeeting(title);
-        queryClient.invalidateQueries({ queryKey: ["meetings"] });
-        setTitleModal(null);
-        router.push(`/meeting/${meeting.room_code}`);
-      } else if (titleModal.roomCode) {
-        await updateMeetingTitle(titleModal.roomCode, title);
-        queryClient.invalidateQueries({ queryKey: ["meetings"] });
-        setTitleModal(null);
-      }
+      await updateMeetingTitle(renameModal.roomCode, title);
+      queryClient.invalidateQueries({ queryKey: ["meetings"] });
+      setRenameModal(null);
     } catch {
-      setTitleError(titleModal.mode === "create" ? "Could not create meeting" : "Could not rename meeting");
+      setTitleError("Could not rename meeting");
     } finally {
       setSavingTitle(false);
     }
@@ -106,15 +102,7 @@ export default function DashboardPage() {
     }
   }
 
-  function handleJoin(e: FormEvent) {
-    e.preventDefault();
-    setError(null);
-    const code = joinCode.trim();
-    if (!code) return;
-    router.push(`/meeting/${code}`);
-  }
-
-  if (loading) {
+  if (loading || (typeof window !== "undefined" && localStorage.getItem("admin_token"))) {
     return (
       <div className="page-gradient flex min-h-screen items-center justify-center">
         <div className="flex flex-col items-center gap-4">
@@ -168,61 +156,18 @@ export default function DashboardPage() {
       <main className="relative z-10 mx-auto flex max-w-[1100px] flex-col items-center px-6 py-16 sm:py-24">
         {/* Hero section */}
         <div className="flex w-full flex-col items-center gap-14 sm:flex-row sm:items-center sm:justify-between">
-          {/* Left: Text + Actions */}
+          {/* Left: Text */}
           <div className="max-w-[540px] text-center sm:text-left animate-meet-fade-in">
             <h1 className="text-[3rem] font-extrabold leading-[1.1] tracking-tight text-[#1a1a2e] sm:text-[3.5rem]">
-              Video calls for{" "}
+              Welcome to{" "}
               <span className="bg-gradient-to-r from-[#4285f4] via-[#7c3aed] to-[#00c4cc] bg-clip-text text-transparent">
-                everyone
+                LinguaMeet
               </span>
             </h1>
             <p className="mt-5 text-lg text-[#64748b] leading-relaxed">
-              Live translated captions, chat, and screen sharing — connect with anyone, in any language.
+              Your doctor will send you a personal link when it's time for your appointment. You don't need to
+              create or join a meeting yourself — just open the link they share with you.
             </p>
-
-            {error && (
-              <div className="mt-5 glass-card flex items-center gap-2 rounded-2xl px-5 py-3 text-sm text-[#ea4335]">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="#ea4335">
-                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" />
-                </svg>
-                {error}
-              </div>
-            )}
-
-            <div className="mt-10 flex flex-col gap-4 sm:flex-row sm:items-center">
-              <button
-                id="new-meeting-button"
-                onClick={() => {
-                  setTitleError(null);
-                  setTitleModal({ mode: "create", value: "Untitled meeting" });
-                }}
-                className="btn-gradient flex items-center justify-center gap-3 rounded-2xl px-8 py-4 text-base"
-              >
-                <VideoCallIcon size={22} />
-                New meeting
-              </button>
-
-              <form onSubmit={handleJoin} className="flex items-center gap-2">
-                <div className="relative flex items-center">
-                  <KeyboardIcon size={18} className="absolute left-4 text-[#94a3b8]" />
-                  <input
-                    id="join-code-input"
-                    value={joinCode}
-                    onChange={(e) => setJoinCode(e.target.value)}
-                    placeholder="Enter a code"
-                    className="input-modern w-[230px] pl-11"
-                  />
-                </div>
-                <button
-                  id="join-meeting-button"
-                  type="submit"
-                  disabled={!joinCode.trim()}
-                  className="rounded-xl px-5 py-3.5 text-sm font-semibold text-[#4285f4] hover:bg-[#4285f4]/10 disabled:text-[#94a3b8] disabled:hover:bg-transparent transition-all duration-200"
-                >
-                  Join
-                </button>
-              </form>
-            </div>
           </div>
 
           {/* Right: Abstract illustration */}
@@ -314,7 +259,7 @@ export default function DashboardPage() {
                         e.preventDefault();
                         e.stopPropagation();
                         setTitleError(null);
-                        setTitleModal({ mode: "rename", roomCode: m.room_code, value: m.title });
+                        setRenameModal({ roomCode: m.room_code, value: m.title });
                       }}
                       aria-label={`Rename ${m.title}`}
                       title="Rename meeting"
@@ -372,18 +317,16 @@ export default function DashboardPage() {
         )}
       </main>
 
-      {titleModal && (
+      {renameModal && (
         <div
           className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4"
-          onClick={() => !savingTitle && setTitleModal(null)}
+          onClick={() => !savingTitle && setRenameModal(null)}
         >
           <div
             className="glass-card w-full max-w-[420px] rounded-3xl px-8 py-8 animate-meet-scale-in"
             onClick={(e) => e.stopPropagation()}
           >
-            <h2 className="text-lg font-bold text-[#1a1a2e]">
-              {titleModal.mode === "create" ? "New meeting" : "Rename meeting"}
-            </h2>
+            <h2 className="text-lg font-bold text-[#1a1a2e]">Rename meeting</h2>
 
             {titleError && (
               <div className="mt-4 flex items-center gap-2 rounded-2xl bg-[#ea4335]/8 px-4 py-3 text-sm text-[#ea4335]">
@@ -391,13 +334,13 @@ export default function DashboardPage() {
               </div>
             )}
 
-            <form onSubmit={handleTitleModalSubmit} className="mt-5">
+            <form onSubmit={handleRenameSubmit} className="mt-5">
               <input
                 id="meeting-title-input"
                 required
                 autoFocus
-                value={titleModal.value}
-                onChange={(e) => setTitleModal({ ...titleModal, value: e.target.value })}
+                value={renameModal.value}
+                onChange={(e) => setRenameModal({ ...renameModal, value: e.target.value })}
                 placeholder="Meeting title"
                 className="input-modern w-full"
               />
@@ -405,7 +348,7 @@ export default function DashboardPage() {
               <div className="mt-6 flex justify-end gap-3">
                 <button
                   type="button"
-                  onClick={() => setTitleModal(null)}
+                  onClick={() => setRenameModal(null)}
                   disabled={savingTitle}
                   className="rounded-xl px-5 py-3 text-sm font-semibold text-[#64748b] hover:bg-black/5 transition-all duration-200"
                 >
@@ -414,10 +357,10 @@ export default function DashboardPage() {
                 <button
                   id="save-meeting-title"
                   type="submit"
-                  disabled={savingTitle || !titleModal.value.trim()}
+                  disabled={savingTitle || !renameModal.value.trim()}
                   className="btn-gradient rounded-xl px-6 py-3 text-sm"
                 >
-                  {savingTitle ? "Saving..." : titleModal.mode === "create" ? "Create" : "Save"}
+                  {savingTitle ? "Saving..." : "Save"}
                 </button>
               </div>
             </form>

@@ -7,6 +7,8 @@ const nextConfig = {
     return [
       { source: "/meetings/:path*", destination: `${BACKEND_URL}/meetings/:path*` },
       { source: "/users/:path*", destination: `${BACKEND_URL}/users/:path*` },
+      { source: "/admin/:path*", destination: `${BACKEND_URL}/admin/:path*` },
+      { source: "/patient-links/:path*", destination: `${BACKEND_URL}/patient-links/:path*` },
       { source: "/health", destination: `${BACKEND_URL}/health` },
       { source: "/socket.io/:path*", destination: `${BACKEND_URL}/socket.io/:path*` },
     ];

@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Meeting, MeetingParticipant, MeetingStatus, TranscriptEntry, User
+from app.models import ConsultationSession, ConsultationStatus, Meeting, MeetingParticipant, MeetingStatus, PatientLink, TranscriptEntry, User
 from app.schemas.meeting import CreateMeetingRequest, MeetingResponse, UpdateMeetingRequest
 from app.schemas.transcript import MeetingSummaryResponse, TranscriptEntryResponse
 from app.storage.local_storage import get_file_path, list_files, save_file
@@ -60,6 +60,17 @@ def get_meeting(
     db: Session = Depends(get_db),
 ) -> Meeting:
     return _get_meeting_or_404(room_code, db)
+
+
+@router.get("/{room_code}/access-info")
+def get_access_info(
+    room_code: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, bool]:
+    meeting = _get_meeting_or_404(room_code, db)
+    is_doctor_room = db.query(PatientLink).filter(PatientLink.room_id == meeting.id).first() is not None
+    return {"is_doctor_room": is_doctor_room, "is_host": current_user.id == meeting.host_id}
 
 
 @router.patch("/{room_code}", response_model=MeetingResponse)
@@ -195,9 +206,15 @@ async def upload_recording(
     db: Session = Depends(get_db),
 ) -> dict[str, str]:
     meeting = _get_meeting_or_404(room_code, db)
+    active_session = (
+        db.query(ConsultationSession)
+        .filter(ConsultationSession.room_id == meeting.id, ConsultationSession.status == ConsultationStatus.ACTIVE)
+        .first()
+    )
+    subpath_id = active_session.id if active_session else meeting.id
     data = await file.read()
     filename = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}.webm"
-    save_file(f"meeting-recording/{meeting.id}", filename, data)
+    save_file(f"meeting-recording/{subpath_id}", filename, data)
     return {"filename": filename}
 
 

@@ -2,9 +2,10 @@ import asyncio
 import time
 
 import socketio
+from app.admin.auth import is_valid_admin_token
 from app.config import settings
 from app.database import SessionLocal
-from app.models import Meeting, TranscriptEntry, User, UserSettings
+from app.models import ConsultationSession, ConsultationStatus, Meeting, PatientLink, TranscriptEntry, User, UserSettings
 from app.speech.streaming_session import SpeechEvent, StreamingSession
 from app.speech.transcriber import transcribe_final, transcribe_partial
 from app.translation.translator import translate
@@ -39,6 +40,47 @@ def _get_user_by_id(user_id: str | None) -> User | None:
         db.close()
 
 
+def _authorize_room_join(room_code: str, user_id: str, access_token: str | None, admin_token: str | None) -> bool:
+    """The real access-control boundary for the doctor/patient flow: a regular
+    meeting stays open to anyone (unrelated legacy behavior), but a "doctor
+    room" (one with patient links) may only be entered by its host, an
+    admin-authenticated browser, or a patient holding a single-use token
+    issued when they were actually admitted. A REST-layer check alone isn't
+    enough — this socket handshake is what actually grants WebRTC/caption
+    access, so it has to be enforced here too."""
+    db = SessionLocal()
+    try:
+        meeting = db.query(Meeting).filter(Meeting.room_code == room_code).first()
+        if meeting is None:
+            return False
+        is_doctor_room = db.query(PatientLink).filter(PatientLink.room_id == meeting.id).first() is not None
+        if not is_doctor_room:
+            return True
+        if meeting.host_id == user_id:
+            return True
+        if is_valid_admin_token(admin_token):
+            return True
+        if access_token:
+            active_session = (
+                db.query(ConsultationSession)
+                .filter(
+                    ConsultationSession.room_id == meeting.id,
+                    ConsultationSession.access_token == access_token,
+                    ConsultationSession.status == ConsultationStatus.ACTIVE,
+                    ConsultationSession.patient_user_id == user_id,
+                )
+                .first()
+            )
+            if active_session is not None:
+                # single-use — consume it so it can't be replayed on another device/tab
+                active_session.access_token = None
+                db.commit()
+                return True
+        return False
+    finally:
+        db.close()
+
+
 @sio.event
 async def connect(sid, environ, auth):
     user = _get_user_by_id((auth or {}).get("user_id"))
@@ -66,6 +108,15 @@ async def disconnect(sid):
 async def join_room(sid, data):
     room_code = data["room_code"]
     session = await sio.get_session(sid)
+
+    authorized = await asyncio.to_thread(
+        _authorize_room_join, room_code, session["user_id"], data.get("access_token"), data.get("admin_token")
+    )
+    if not authorized:
+        print(f"[rtc] join-room REJECTED sid={sid} room={room_code} user={session['user_id']}", flush=True)
+        await sio.emit("join-rejected", {"reason": "unauthorized"}, room=sid)
+        return
+
     participants = rooms.setdefault(room_code, {})
 
     mic_on = data.get("mic_on", True)
@@ -201,9 +252,15 @@ def _save_transcript_entry(room_code: str, user_id: str, speaker_name: str, text
         meeting = db.query(Meeting).filter(Meeting.room_code == room_code).first()
         if meeting is None:
             return
+        active_session = (
+            db.query(ConsultationSession)
+            .filter(ConsultationSession.room_id == meeting.id, ConsultationSession.status == ConsultationStatus.ACTIVE)
+            .first()
+        )
         db.add(
             TranscriptEntry(
                 meeting_id=meeting.id,
+                session_id=active_session.id if active_session else None,
                 user_id=user_id,
                 speaker_name=speaker_name,
                 text=text,
@@ -279,6 +336,18 @@ async def _handle_speech_event(sid: str, room_code: str, user_id: str, full_name
         },
         room=room_code,
     )
+
+
+async def kick_patient(room_code: str, patient_user_id: str) -> None:
+    participants = rooms.get(room_code, {})
+    target_sids = [sid for sid, p in participants.items() if p["user_id"] == patient_user_id]
+    for target_sid in target_sids:
+        await sio.emit("consultation-ended", {}, room=target_sid)
+        # force-disconnect rather than just removing them from the room — this is what
+        # actually drops their WebRTC signaling and guarantees they can't linger in the
+        # call even if the client-side event handler never runs. The existing disconnect()
+        # handler above does the rooms/participants cleanup and peer-left broadcast.
+        await sio.disconnect(target_sid)
 
 
 @sio.on("audio-chunk")

@@ -166,6 +166,14 @@ export function SummaryIcon({ size = 20, className }: IconProps) {
   );
 }
 
+export function QueueIcon({ size = 20, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" className={className}>
+      <path d="M4 6h16v2H4V6zm0 5h16v2H4v-2zm0 5h10v2H4v-2z" />
+    </svg>
+  );
+}
+
 export function EditIcon({ size = 20, className }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" className={className}>

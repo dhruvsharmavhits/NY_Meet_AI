@@ -12,6 +12,9 @@ class TranscriptEntry(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     meeting_id: Mapped[str] = mapped_column(String(36), ForeignKey("meetings.id"), index=True, nullable=False)
+    session_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("consultation_sessions.id"), index=True, nullable=True
+    )
     user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
     speaker_name: Mapped[str] = mapped_column(String(255), nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)

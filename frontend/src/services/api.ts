@@ -13,8 +13,34 @@ api.interceptors.request.use((config) => {
   if (userId) {
     config.headers["X-User-Id"] = userId;
   }
+  const adminToken = typeof window !== "undefined" ? localStorage.getItem("admin_token") : null;
+  if (adminToken) {
+    config.headers["X-Admin-Token"] = adminToken;
+  }
   return config;
 });
+
+// admin_token is only valid for as long as the backend process has been running
+// (it's an in-memory session store, not a DB-backed one) — a backend restart
+// silently invalidates every admin's token. Without this, a stale token just
+// gets sent forever and every /admin/* call 403s indefinitely with no feedback.
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (
+      typeof window !== "undefined" &&
+      error.response?.status === 403 &&
+      typeof error.config?.url === "string" &&
+      error.config.url.includes("/admin")
+    ) {
+      localStorage.removeItem("admin_token");
+      if (!window.location.pathname.startsWith("/meeting/") && window.location.pathname !== "/admin/login") {
+        window.location.href = "/admin/login";
+      }
+    }
+    return Promise.reject(error);
+  }
+);
 
 export interface User {
   id: string;
@@ -154,4 +180,121 @@ export async function downloadRecording(roomCode: string, filename: string): Pro
   link.download = filename;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+export type ConsultationStatus = "waiting" | "active" | "completed";
+
+export interface ConsultationSession {
+  id: string;
+  room_id: string;
+  patient_link_id: string;
+  patient_name: string;
+  status: ConsultationStatus;
+  queue_position: number | null;
+  created_at: string;
+  started_at: string | null;
+  ended_at: string | null;
+}
+
+export interface PatientLink {
+  id: string;
+  room_id: string;
+  code: string;
+  label: string | null;
+  created_at: string;
+}
+
+export interface PatientLinkWithSession {
+  link: PatientLink;
+  session: ConsultationSession | null;
+}
+
+export interface JoinPatientLinkResult {
+  session: ConsultationSession;
+  room_code: string | null;
+  access_token: string | null;
+}
+
+export async function getMeetingAccessInfo(roomCode: string): Promise<{ is_doctor_room: boolean; is_host: boolean }> {
+  const { data } = await api.get<{ is_doctor_room: boolean; is_host: boolean }>(`/meetings/${roomCode}/access-info`);
+  return data;
+}
+
+export async function adminLogin(password: string): Promise<string> {
+  const { data } = await api.post<{ token: string }>("/admin/login", { password });
+  return data.token;
+}
+
+export async function createDoctorRoom(title: string): Promise<Meeting> {
+  const { data } = await api.post<Meeting>("/admin/rooms", { title });
+  return data;
+}
+
+export async function listDoctorRooms(): Promise<Meeting[]> {
+  const { data } = await api.get<Meeting[]>("/admin/rooms");
+  return data;
+}
+
+export async function createPatientLink(roomCode: string, label: string): Promise<PatientLink> {
+  const { data } = await api.post<PatientLink>(`/admin/rooms/${roomCode}/patient-links`, { label });
+  return data;
+}
+
+export async function listPatientLinks(roomCode: string): Promise<PatientLinkWithSession[]> {
+  const { data } = await api.get<PatientLinkWithSession[]>(`/admin/rooms/${roomCode}/patient-links`);
+  return data;
+}
+
+export async function getQueue(roomCode: string): Promise<ConsultationSession[]> {
+  const { data } = await api.get<ConsultationSession[]>(`/admin/rooms/${roomCode}/queue`);
+  return data;
+}
+
+export async function admitSession(sessionId: string): Promise<ConsultationSession> {
+  const { data } = await api.post<ConsultationSession>(`/admin/sessions/${sessionId}/admit`);
+  return data;
+}
+
+export async function completeSession(sessionId: string): Promise<ConsultationSession> {
+  const { data } = await api.post<ConsultationSession>(`/admin/sessions/${sessionId}/complete`);
+  return data;
+}
+
+export async function fetchSessionTranscript(sessionId: string): Promise<TranscriptEntry[]> {
+  const { data } = await api.get<TranscriptEntry[]>(`/admin/sessions/${sessionId}/transcript`);
+  return data;
+}
+
+export async function listSessionRecordings(sessionId: string): Promise<string[]> {
+  const { data } = await api.get<string[]>(`/admin/sessions/${sessionId}/recordings`);
+  return data;
+}
+
+export async function downloadSessionRecording(sessionId: string, filename: string): Promise<void> {
+  const { data } = await api.get(`/admin/sessions/${sessionId}/recordings/${filename}`, {
+    responseType: "blob",
+  });
+  const url = URL.createObjectURL(data as Blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+export async function getPatientLinkInfo(code: string): Promise<{ room_code: string; title: string; patient_name: string }> {
+  const { data } = await api.get<{ room_code: string; title: string; patient_name: string }>(`/patient-links/${code}`);
+  return data;
+}
+
+export async function joinPatientLink(code: string): Promise<JoinPatientLinkResult> {
+  const { data } = await api.post<JoinPatientLinkResult>(`/patient-links/${code}/join`);
+  return data;
+}
+
+export async function getPatientSession(sessionId: string): Promise<JoinPatientLinkResult> {
+  const { data } = await api.get<JoinPatientLinkResult>(`/patient-links/sessions/${sessionId}`, {
+    params: { _: Date.now() },
+  });
+  return data;
 }

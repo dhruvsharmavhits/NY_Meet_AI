@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { fetchMySettings, getMeeting, joinMeeting, leaveMeeting, updateMySettings, updateProfile, uploadRecording } from "@/services/api";
+import { adminLogin, fetchMySettings, getMeeting, getMeetingAccessInfo, getQueue, joinMeeting, leaveMeeting, updateMySettings, updateProfile, uploadRecording } from "@/services/api";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useAuthStore } from "@/store/authStore";
 import { NamePrompt } from "@/components/NamePrompt";
@@ -14,6 +14,7 @@ import { Toolbar } from "@/meeting/Toolbar";
 import { ChatPanel } from "@/chat/ChatPanel";
 import { ParticipantsPanel } from "@/meeting/ParticipantsPanel";
 import { TranscriptPanel } from "@/meeting/TranscriptPanel";
+import { QueuePanel } from "@/meeting/QueuePanel";
 import { SummaryModal } from "@/meeting/SummaryModal";
 import { CaptionOverlay } from "@/captions/CaptionOverlay";
 import { LinguaMeetLogo } from "@/components/Icons";
@@ -48,6 +49,7 @@ export default function MeetingRoomPage() {
   const [chatOpen, setChatOpen] = useState(false);
   const [participantsOpen, setParticipantsOpen] = useState(false);
   const [transcriptOpen, setTranscriptOpen] = useState(false);
+  const [queueOpen, setQueueOpen] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [showOriginalCaptions, setShowOriginalCaptions] = useState(false);
   const [captionsOn, setCaptionsOn] = useState(true);
@@ -62,11 +64,55 @@ export default function MeetingRoomPage() {
     enabled: !!roomCode && !!user,
   });
 
+  const [adminUnlocked, setAdminUnlocked] = useState(false);
+  const isAdmin = adminUnlocked || (typeof window !== "undefined" && !!localStorage.getItem("admin_token"));
+  const isHost = !!(user && meeting && user.id === meeting.host_id);
+  const showQueue = isAdmin && isHost;
+  const isPatientMode = router.query.patient === "1";
+  const accessTokenParam = typeof router.query.token === "string" ? router.query.token : undefined;
+  const autoJoinStartedRef = useRef(false);
+
+  const [gatePassword, setGatePassword] = useState("");
+  const [gateError, setGateError] = useState<string | null>(null);
+  const [gateSubmitting, setGateSubmitting] = useState(false);
+
+  const { data: accessInfo } = useQuery({
+    queryKey: ["access-info", roomCode],
+    queryFn: () => getMeetingAccessInfo(roomCode as string),
+    enabled: !!roomCode && !!user,
+  });
+
+  const authorized = isHost || isAdmin || !!accessTokenParam;
+  const needsAdminGate = !!accessInfo?.is_doctor_room && !authorized;
+
+  async function handleGateSubmit(e: FormEvent) {
+    e.preventDefault();
+    setGateError(null);
+    setGateSubmitting(true);
+    try {
+      const token = await adminLogin(gatePassword);
+      localStorage.setItem("admin_token", token);
+      setAdminUnlocked(true);
+    } catch {
+      setGateError("Invalid password");
+    } finally {
+      setGateSubmitting(false);
+    }
+  }
+
   const { data: mySettings } = useQuery({
     queryKey: ["my-settings"],
     queryFn: fetchMySettings,
     enabled: !!user,
   });
+
+  const { data: queueForBadge } = useQuery({
+    queryKey: ["queue-badge", roomCode],
+    queryFn: () => getQueue(roomCode as string),
+    enabled: showQueue && !!roomCode,
+    refetchInterval: 5000,
+  });
+  const waitingCount = queueForBadge?.filter((s) => s.status === "waiting").length ?? 0;
 
   useEffect(() => {
     if (user && !displayName) setDisplayName(user.full_name);
@@ -96,16 +142,19 @@ export default function MeetingRoomPage() {
     connected,
     reconnecting,
     error,
+    consultationEnded,
+    joinRejected,
     sendChat,
     toggleMic,
     toggleCamera,
     toggleScreenShare,
   } = useMeetingRoom({
     roomCode,
-    enabled: phase === "call" && !!user,
+    enabled: phase === "call" && !!user && authorized,
     initialStream: joinStream,
     initialMicOn: joinMicOn,
     initialCameraOn: joinCameraOn,
+    accessToken: accessTokenParam,
   });
 
   const { recording, start: startRecording, stop: stopRecording } = useRecorder({ localStream, remoteStreams });
@@ -158,6 +207,32 @@ export default function MeetingRoomPage() {
     setJoinCameraOn(cameraOnAtJoin);
     setPhase("call");
   }
+
+  useEffect(() => {
+    if (!isPatientMode || !authorized || phase !== "lobby" || !user || !meeting || autoJoinStartedRef.current) return;
+    autoJoinStartedRef.current = true;
+    (async () => {
+      let stream: MediaStream | null = null;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+      } catch {
+        stream = null;
+      }
+      await handleLobbyJoin(user.full_name, stream, true, true, mySettings?.caption_language ?? "en");
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPatientMode, authorized, phase, user, meeting]);
+
+  useEffect(() => {
+    if (!consultationEnded) return;
+    localStream?.getTracks().forEach((t) => t.stop());
+    router.replace("/consultation-ended");
+  }, [consultationEnded, localStream, router]);
+
+  useEffect(() => {
+    if (!joinRejected) return;
+    localStream?.getTracks().forEach((t) => t.stop());
+  }, [joinRejected, localStream]);
 
   async function handleToggleRecording() {
     if (!roomCode) return;
@@ -246,8 +321,100 @@ export default function MeetingRoomPage() {
     );
   }
 
+  // Wait for the access check before ever rendering the lobby/call for a
+  // non-host, non-admin, non-invited visitor — otherwise they'd briefly see
+  // the pre-join screen before the gate kicks in.
+  if (!authorized && accessInfo === undefined) {
+    return (
+      <div className="flex min-h-screen items-center justify-center dark-gradient">
+        <div className="meet-spinner-large" />
+      </div>
+    );
+  }
+
+  if (joinRejected) {
+    return (
+      <div className="page-gradient relative flex min-h-screen flex-col items-center justify-center gap-6 overflow-hidden px-4">
+        <div className="bg-blob bg-blob-1" />
+        <div className="relative z-10 flex flex-col items-center gap-4 text-center">
+          <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-[#ea4335]/10">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="#ea4335">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" />
+            </svg>
+          </div>
+          <h1 className="text-2xl font-bold text-[#1a1a2e]">Access denied</h1>
+          <p className="max-w-sm text-sm text-[#64748b]">
+            You're not authorized to join this meeting. Use the personal link your doctor sent you, or sign in as the host.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (needsAdminGate) {
+    return (
+      <div className="page-gradient relative flex min-h-screen flex-col items-center justify-center overflow-hidden px-4">
+        <div className="bg-blob bg-blob-1" />
+        <div className="bg-blob bg-blob-2" />
+        <div className="relative z-10 w-full max-w-[420px] animate-meet-fade-in">
+          <div className="glass-card rounded-3xl px-10 py-12 glow-blue">
+            <div className="mb-8 flex flex-col items-center gap-4">
+              <LinguaMeetLogo size={48} />
+              <div className="text-center">
+                <h1 className="text-2xl font-bold text-[#1a1a2e]">Admin access required</h1>
+                <p className="mt-1 text-sm text-[#64748b]">
+                  This is a private room. Enter the admin password, or use your personal invite link.
+                </p>
+              </div>
+            </div>
+
+            {gateError && (
+              <div className="mb-5 flex items-center gap-2 rounded-2xl bg-[#ea4335]/8 px-4 py-3 text-sm text-[#ea4335]">
+                {gateError}
+              </div>
+            )}
+
+            <form onSubmit={handleGateSubmit} className="space-y-5">
+              <input
+                id="meeting-admin-password-input"
+                type="password"
+                required
+                autoFocus
+                value={gatePassword}
+                onChange={(e) => setGatePassword(e.target.value)}
+                placeholder="Admin password"
+                className="input-modern w-full"
+              />
+              <button
+                id="meeting-admin-gate-submit"
+                type="submit"
+                disabled={gateSubmitting || !gatePassword}
+                className="btn-gradient w-full rounded-2xl py-4 text-base"
+              >
+                {gateSubmitting ? "Signing in..." : "Sign in"}
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // Pre-join lobby
   if (phase === "lobby") {
+    if (isPatientMode) {
+      return (
+        <div className="flex min-h-screen items-center justify-center dark-gradient">
+          <div className="flex flex-col items-center gap-6 animate-meet-fade-in">
+            <div className="animate-pulse-glow rounded-2xl p-4">
+              <LinguaMeetLogo size={48} />
+            </div>
+            <div className="meet-spinner-large" />
+            <span className="text-sm font-medium text-white/40">Joining your consultation...</span>
+          </div>
+        </div>
+      );
+    }
     return (
       <PreJoinLobby
         meetingTitle={meeting.title}
@@ -344,6 +511,9 @@ export default function MeetingRoomPage() {
         {transcriptOpen && roomCode && (
           <TranscriptPanel roomCode={roomCode} onClose={() => setTranscriptOpen(false)} />
         )}
+        {queueOpen && showQueue && roomCode && (
+          <QueuePanel roomCode={roomCode} onClose={() => setQueueOpen(false)} />
+        )}
       </div>
 
       {/* Summary modal */}
@@ -357,6 +527,15 @@ export default function MeetingRoomPage() {
         chatOpen={chatOpen}
         participantsOpen={participantsOpen}
         transcriptOpen={transcriptOpen}
+        showQueue={showQueue}
+        queueBadge={waitingCount > 0 ? waitingCount : undefined}
+        queueOpen={queueOpen}
+        onToggleQueue={() => {
+          setQueueOpen((v) => {
+            if (!v) { setChatOpen(false); setParticipantsOpen(false); setTranscriptOpen(false); }
+            return !v;
+          });
+        }}
         showOriginalCaptions={showOriginalCaptions}
         captionsOn={captionsOn}
         recording={recording}
@@ -366,19 +545,19 @@ export default function MeetingRoomPage() {
         onToggleScreenShare={toggleScreenShare}
         onToggleChat={() => {
           setChatOpen((v) => {
-            if (!v) { setParticipantsOpen(false); setTranscriptOpen(false); }
+            if (!v) { setParticipantsOpen(false); setTranscriptOpen(false); setQueueOpen(false); }
             return !v;
           });
         }}
         onToggleParticipants={() => {
           setParticipantsOpen((v) => {
-            if (!v) { setChatOpen(false); setTranscriptOpen(false); }
+            if (!v) { setChatOpen(false); setTranscriptOpen(false); setQueueOpen(false); }
             return !v;
           });
         }}
         onToggleTranscript={() => {
           setTranscriptOpen((v) => {
-            if (!v) { setChatOpen(false); setParticipantsOpen(false); }
+            if (!v) { setChatOpen(false); setParticipantsOpen(false); setQueueOpen(false); }
             return !v;
           });
         }}

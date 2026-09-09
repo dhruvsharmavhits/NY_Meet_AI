@@ -31,6 +31,7 @@ interface UseMeetingRoomOptions {
   initialStream: MediaStream | null;
   initialMicOn: boolean;
   initialCameraOn: boolean;
+  accessToken?: string;
 }
 
 export function useMeetingRoom({
@@ -39,6 +40,7 @@ export function useMeetingRoom({
   initialStream,
   initialMicOn,
   initialCameraOn,
+  accessToken,
 }: UseMeetingRoomOptions) {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
@@ -54,6 +56,8 @@ export function useMeetingRoom({
   const [connected, setConnected] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [consultationEnded, setConsultationEnded] = useState(false);
+  const [joinRejected, setJoinRejected] = useState(false);
 
   const peerConnections = useRef<Record<string, RTCPeerConnection>>({});
   const videoSendersRef = useRef<Record<string, RTCRtpSender>>({});
@@ -70,6 +74,7 @@ export function useMeetingRoom({
   const cameraOnRef = useRef(initialCameraOn);
   const stopAudioCaptureRef = useRef<(() => void) | null>(null);
   const everConnectedRef = useRef(false);
+  const consultationEndedRef = useRef(false);
   const localIceCandidateCountsRef = useRef<Record<string, number>>({});
   const remoteIceCandidateCountsRef = useRef<Record<string, number>>({});
   const ontrackFiredRef = useRef<Record<string, Set<string>>>({});
@@ -315,7 +320,13 @@ export function useMeetingRoom({
           room_code: activeRoomCode,
           mic_on: micOnRef.current,
           camera_on: cameraOnRef.current,
+          access_token: accessToken,
+          admin_token: typeof window !== "undefined" ? localStorage.getItem("admin_token") : null,
         });
+      });
+
+      socket.on("join-rejected", () => {
+        setJoinRejected(true);
       });
 
       socket.on("connect_error", () => {
@@ -328,7 +339,7 @@ export function useMeetingRoom({
 
       socket.on("disconnect", () => {
         setConnected(false);
-        if (everConnectedRef.current) setReconnecting(true);
+        if (everConnectedRef.current && !consultationEndedRef.current) setReconnecting(true);
         Object.keys(peerConnections.current).forEach((sid) => peerConnections.current[sid].close());
         peerConnections.current = {};
         videoSendersRef.current = {};
@@ -460,6 +471,11 @@ if (screenSharingRef.current && screenTrackRef.current) {
         closePeerConnection(data.sid);
       });
 
+      socket.on("consultation-ended", () => {
+        consultationEndedRef.current = true;
+        setConsultationEnded(true);
+      });
+
       socket.on("chat-message", (msg: ChatMessage) => {
         setMessages((prev) => [...prev, msg]);
       });
@@ -507,6 +523,8 @@ if (screenSharingRef.current && screenTrackRef.current) {
       socket.off("peer-joined");
       socket.off("signal");
       socket.off("peer-left");
+      socket.off("consultation-ended");
+      socket.off("join-rejected");
       socket.off("chat-message");
       socket.off("caption");
       socket.off("partial-transcript");
@@ -700,6 +718,8 @@ if (screenSharingRef.current && screenTrackRef.current) {
     connected,
     reconnecting,
     error,
+    consultationEnded,
+    joinRejected,
     sendChat,
     toggleMic,
     toggleCamera,

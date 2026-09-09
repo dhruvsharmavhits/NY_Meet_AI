@@ -15,6 +15,7 @@ import {
   StopIcon,
   TranscriptIcon,
   SummaryIcon,
+  QueueIcon,
 } from "@/components/Icons";
 
 interface ToolbarProps {
@@ -24,6 +25,10 @@ interface ToolbarProps {
   chatOpen: boolean;
   participantsOpen: boolean;
   transcriptOpen: boolean;
+  showQueue?: boolean;
+  queueBadge?: number;
+  queueOpen?: boolean;
+  onToggleQueue?: () => void;
   showOriginalCaptions: boolean;
   captionsOn: boolean;
   recording: boolean;
@@ -89,6 +94,10 @@ export function Toolbar({
   chatOpen,
   participantsOpen,
   transcriptOpen,
+  showQueue,
+  queueBadge,
+  queueOpen,
+  onToggleQueue,
   showOriginalCaptions,
   captionsOn,
   recording,
@@ -250,6 +259,17 @@ export function Toolbar({
 
       {/* Right: side panel toggles */}
       <div className="hidden items-center gap-2 sm:flex">
+        {showQueue && (
+          <ToolbarButton
+            id="toolbar-queue"
+            active={queueOpen}
+            onClick={() => onToggleQueue?.()}
+            label="Patient queue"
+            badge={queueBadge}
+          >
+            <QueueIcon size={20} />
+          </ToolbarButton>
+        )}
         <ToolbarButton
           id="toolbar-participants"
           active={participantsOpen}
