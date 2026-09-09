@@ -78,15 +78,22 @@ export function useDevicePreview(enabled: boolean): UseDevicePreviewResult {
         return;
       }
 
+      // Getting here means permission was granted (or the device doesn't
+      // exist, in which case there's nothing to disable) — but mic/camera
+      // should start OFF by default regardless. The user opts in explicitly
+      // via the toggle buttons below, which just flip .enabled on these
+      // already-granted tracks (instant, no repeat permission prompt).
+      const audioTrack = s?.getAudioTracks()[0] ?? null;
+      const videoTrack = s?.getVideoTracks()[0] ?? null;
+      if (audioTrack) audioTrack.enabled = false;
+      if (videoTrack) videoTrack.enabled = false;
+
       streamRef.current = s;
-setStream(s);
+      setStream(s);
+      setMicOn(false);
+      setCameraOn(false);
 
-const audioTrack = s?.getAudioTracks()[0] ?? null;
-const videoTrack = s?.getVideoTracks()[0] ?? null;
-setMicOn(audioTrack?.enabled ?? false);
-setCameraOn(videoTrack?.enabled ?? false);
-
-setLoading(false);
+      setLoading(false);
     }
 
     acquire();
@@ -126,7 +133,16 @@ if (cameraOn) {
   return;
 }
 
-  // CAMERA ON
+  // CAMERA ON — the track already exists (just disabled) whenever
+  // permission was granted at acquire time, so just re-enable it instead of
+  // requesting getUserMedia again (which would be slower and could prompt
+  // again in some browsers).
+  if (videoTrack) {
+    videoTrack.enabled = true;
+    setCameraOn(true);
+    return;
+  }
+
   try {
     const videoStream = await navigator.mediaDevices.getUserMedia({
       video: true,

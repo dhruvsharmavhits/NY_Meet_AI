@@ -2,7 +2,14 @@ const BACKEND_URL = process.env.BACKEND_INTERNAL_URL || "http://127.0.0.1:8001";
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  reactStrictMode: true,
+  // The meeting room owns real singleton side effects — a socket.io
+  // connection, getUserMedia streams, MediaRecorder — that a second
+  // mount/cleanup/remount (StrictMode's deliberate dev-only double-invoke)
+  // replays for real: e.g. a single-use join token gets consumed by the
+  // throwaway first invocation, so the one that actually stays mounted gets
+  // rejected. Not worth fighting effect-by-effect; this class of app is the
+  // standard case for leaving it off.
+  reactStrictMode: false,
   async rewrites() {
     return [
       { source: "/meetings/:path*", destination: `${BACKEND_URL}/meetings/:path*` },

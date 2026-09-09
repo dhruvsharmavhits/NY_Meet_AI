@@ -137,6 +137,7 @@ export default function MeetingRoomPage() {
     messages,
     captions,
     micOn,
+    micConnecting,
     cameraOn,
     screenSharing,
     connected,
@@ -218,7 +219,11 @@ export default function MeetingRoomPage() {
       } catch {
         stream = null;
       }
-      await handleLobbyJoin(user.full_name, stream, true, true, mySettings?.caption_language ?? "en");
+      // permission is requested up front so the tracks exist and can be
+      // enabled instantly later, but mic/camera start OFF by default —
+      // the patient turns them on themselves once in the call.
+      stream?.getTracks().forEach((t) => (t.enabled = false));
+      await handleLobbyJoin(user.full_name, stream, false, false, mySettings?.caption_language ?? "en");
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isPatientMode, authorized, phase, user, meeting]);
@@ -540,6 +545,7 @@ export default function MeetingRoomPage() {
         captionsOn={captionsOn}
         recording={recording}
         participantCount={Object.keys(participants).length + 1}
+        micConnecting={micConnecting}
         onToggleMic={toggleMic}
         onToggleCamera={toggleCamera}
         onToggleScreenShare={toggleScreenShare}

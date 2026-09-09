@@ -20,6 +20,7 @@ import {
 
 interface ToolbarProps {
   micOn: boolean;
+  micConnecting?: boolean;
   cameraOn: boolean;
   screenSharing: boolean;
   chatOpen: boolean;
@@ -89,6 +90,7 @@ function ToolbarButton({
 
 export function Toolbar({
   micOn,
+  micConnecting,
   cameraOn,
   screenSharing,
   chatOpen,
@@ -138,9 +140,22 @@ export function Toolbar({
           id="toolbar-mic"
           off={!micOn}
           onClick={onToggleMic}
-          label={micOn ? "Turn off microphone" : "Turn on microphone"}
+          label={micConnecting ? "Connecting microphone..." : micOn ? "Turn off microphone" : "Turn on microphone"}
         >
-          {micOn ? <MicIcon size={20} /> : <MicOffIcon size={20} />}
+          {micConnecting ? (
+            <span
+              className="block h-4 w-4 rounded-full"
+              style={{
+                border: "2px solid rgba(255, 255, 255, 0.25)",
+                borderTopColor: "#fff",
+                animation: "meet-spin 0.8s linear infinite",
+              }}
+            />
+          ) : micOn ? (
+            <MicIcon size={20} />
+          ) : (
+            <MicOffIcon size={20} />
+          )}
         </ToolbarButton>
 
         {/* Camera */}

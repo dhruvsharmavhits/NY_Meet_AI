@@ -45,6 +45,20 @@ def _get_link_or_404(code: str, db: Session) -> PatientLink:
     return link
 
 
+def _requeue_if_reconnecting(session: ConsultationSession, db: Session) -> None:
+    """A patient re-opening their link while their consultation is still
+    ongoing (not completed) is treated as a reconnect request, not a silent
+    resume: put them back in the WAITING queue so the doctor sees them
+    reappear (by name) with a fresh Admit button, and consciously lets them
+    back in rather than the patient being auto-reconnected behind the
+    doctor's back."""
+    if session.status == ConsultationStatus.ACTIVE:
+        session.status = ConsultationStatus.WAITING
+        session.access_token = None
+        db.commit()
+        db.refresh(session)
+
+
 @router.get("/{code}", response_model=RoomPublicResponse)
 def get_patient_link(code: str, db: Session = Depends(get_db)) -> RoomPublicResponse:
     link = _get_link_or_404(code, db)
@@ -77,6 +91,7 @@ def join_patient_link(
         current_user.full_name = patient_name
     db.commit()
     db.refresh(session)
+    _requeue_if_reconnecting(session, db)
     active = session.status == ConsultationStatus.ACTIVE
     return JoinPatientLinkResponse(
         session=_session_response(db, session),

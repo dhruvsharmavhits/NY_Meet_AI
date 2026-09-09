@@ -4,6 +4,12 @@ import { startAudioCapture } from "@/meeting/audioCapture";
 import type { Caption, ChatMessage, Participant } from "@/meeting/types";
 
 
+const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+};
+
 const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
@@ -52,6 +58,7 @@ export function useMeetingRoom({
   const [partialCaptions, setPartialCaptions] = useState<Record<string, string>>({});
   const [micOn, setMicOn] = useState(initialMicOn);
   const [cameraOn, setCameraOn] = useState(initialCameraOn);
+  const [micConnecting, setMicConnecting] = useState(false);
   const [screenSharing, setScreenSharing] = useState(false);
   const [connected, setConnected] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
@@ -571,7 +578,7 @@ if (screenSharingRef.current && screenTrackRef.current) {
     [roomCode]
   );
 
-  const toggleMic = useCallback(() => {
+  const toggleMic = useCallback(async () => {
     const track = localStreamRef.current?.getAudioTracks()[0];
     if (track) {
       track.enabled = !track.enabled;
@@ -580,7 +587,47 @@ if (screenSharingRef.current && screenTrackRef.current) {
       if (roomCode) {
         getSocket().emit("media-state", { room_code: roomCode, mic_on: track.enabled, camera_on: cameraOnRef.current });
       }
-    } else {
+      return;
+    }
+
+    // No mic track yet — either permission was never granted or no device was
+    // found when the call started. Re-request it now instead of silently
+    // doing nothing, mirroring toggleCamera's re-acquisition below.
+    setMicConnecting(true);
+    try {
+      const audioStream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS });
+      const newTrack = audioStream.getAudioTracks()[0];
+      if (!newTrack) return;
+
+      if (localStreamRef.current) {
+        localStreamRef.current.addTrack(newTrack);
+        setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
+      } else {
+        const newStream = new MediaStream([newTrack]);
+        localStreamRef.current = newStream;
+        setLocalStream(newStream);
+      }
+
+      Object.values(audioSendersRef.current).forEach((sender) => {
+        sender.replaceTrack(newTrack).catch(() => {});
+      });
+
+      // captions/transcript are driven off a separate capture pipeline that
+      // only ever starts if a mic track existed at call setup — start it now
+      // since this is the first time one has actually become available.
+      if (!stopAudioCaptureRef.current && roomCode && localStreamRef.current) {
+        stopAudioCaptureRef.current = startAudioCapture(localStreamRef.current, roomCode, getSocket());
+      }
+
+      micOnRef.current = true;
+      setMicOn(true);
+      if (roomCode) {
+        getSocket().emit("media-state", { room_code: roomCode, mic_on: true, camera_on: cameraOnRef.current });
+      }
+    } catch (err) {
+      console.error("Unable to start microphone", err);
+    } finally {
+      setMicConnecting(false);
     }
   }, [roomCode]);
 
@@ -713,6 +760,7 @@ if (screenSharingRef.current && screenTrackRef.current) {
     captions,
     partialCaptions,
     micOn,
+    micConnecting,
     cameraOn,
     screenSharing,
     connected,
