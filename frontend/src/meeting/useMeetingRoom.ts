@@ -430,26 +430,23 @@ export function useMeetingRoom({
             await pc.setRemoteDescription(new RTCSessionDescription(payload as RTCSessionDescriptionInit));
             await attachOutgoingTracksAsAnswerer(from, pc);
 
-if (screenSharingRef.current && screenTrackRef.current) {
-  const videoTransceivers = pc
-    .getTransceivers()
-    .filter(
-      (t) =>
-        t.receiver.track?.kind === "video"
-    );
+const videoTransceivers = pc
+  .getTransceivers()
+  .filter((t) => t.receiver.track?.kind === "video");
 
-  const screenTransceiver = videoTransceivers[1];
-
-  if (screenTransceiver) {
-    screenTransceiver.direction = "sendrecv";
-
-    await screenTransceiver.sender.replaceTrack(
-      screenTrackRef.current
-    );
-
-    screenSendersRef.current[from] = screenTransceiver.sender;
-
+// Any video transceiver beyond the first (camera) one is a screen-share
+// m-line. If we're sharing too, attach our track to it; otherwise make sure
+// it's explicitly recvonly so the answer actually accepts the incoming
+// video — leaving direction on its ambiguous default here is what was
+// causing the remote screen share to negotiate but never render.
+for (let i = 1; i < videoTransceivers.length; i++) {
+  const t = videoTransceivers[i];
+  if (screenSharingRef.current && screenTrackRef.current) {
+    t.direction = "sendrecv";
+    await t.sender.replaceTrack(screenTrackRef.current);
+    screenSendersRef.current[from] = t.sender;
   } else {
+    t.direction = "recvonly";
   }
 }
             const answer = await pc.createAnswer();
@@ -725,6 +722,17 @@ if (screenSharingRef.current && screenTrackRef.current) {
       screenTrackRef.current = screenTrack;
       screenSharingRef.current = true;
       setScreenStream(stream);
+      setScreenSharing(true);
+
+      // must reach the server (and force-stop any other current sharer)
+      // BEFORE the renegotiation offer below reaches them — otherwise they
+      // process our offer while still believing they're sharing too, and
+      // attach their own stale screen track onto the transceiver we just
+      // created for this one, corrupting it so our video never renders on
+      // their side.
+      if (roomCode) {
+        getSocket().emit("screen-share-state", { room_code: roomCode, sharing: true });
+      }
 
       await Promise.all(
         Object.entries(peerConnections.current).map(async ([sid, pc]) => {
@@ -750,11 +758,6 @@ if (screenSharingRef.current && screenTrackRef.current) {
       );
 
       screenTrack.onended = () => stopScreenShare();
-
-      setScreenSharing(true);
-      if (roomCode) {
-        getSocket().emit("screen-share-state", { room_code: roomCode, sharing: true });
-      }
     } catch {
     }
   }, [roomCode, stopScreenShare]);

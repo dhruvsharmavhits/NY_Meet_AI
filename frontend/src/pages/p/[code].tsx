@@ -117,7 +117,7 @@ export default function PatientLinkPage() {
                 {linkInfo ? `Hi, ${linkInfo.patient_name}` : "Loading..."}
               </h1>
               <p className="mt-2 text-sm text-[#64748b]">
-                {linkInfo ? `You're joining ${linkInfo.title}` : ""}
+                {linkInfo ? `You're joining with ${linkInfo.title}` : ""}
               </p>
 
               {linkInfo && (
@@ -156,7 +156,7 @@ export default function PatientLinkPage() {
                 Your waiting number is {joined.session.queue_position}
               </p>
               <p className="mt-2 text-sm text-[#64748b]">
-                Please wait until the doctor admits you. This page will update automatically.
+                Please wait until the doctor/provider admits you. This page will update automatically.
               </p>
               <div className="mt-6 flex justify-center">
                 <div className="meet-spinner" />

@@ -249,7 +249,7 @@ export default function AdminDashboardPage() {
                 <h2 className="text-xs font-bold text-[#94a3b8] uppercase tracking-[0.15em]">
                   Private room link
                 </h2>
-                <Link href={`/meeting/${selectedRoom.room_code}`} className="text-sm font-semibold text-[#4285f4] hover:underline">
+                <Link href={`/meeting/${selectedRoom.room_code}`} className="text-sm font-semibold text-[#4285f4] hover:underline" target="_blank" rel="noopener noreferrer">
                   Open persistent room
                 </Link>
               </div>

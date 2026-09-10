@@ -35,17 +35,22 @@ function colorForName(name: string): string {
 }
 
 function initialsFor(name: string): string {
-  const trimmed = name.trim();
+  const cleaned = name
+    .replace(/\s*\(you\)\s*$/i, "")
+    .trim();
 
-  if (!trimmed) return "?";
+  if (!cleaned) return "?";
 
-  const parts = trimmed.split(/\s+/);
+  const parts = cleaned.split(/\s+/);
 
-  return (
-    ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "")).toUpperCase() ||
-    trimmed[0].toUpperCase()
-  );
+  if (parts.length === 1) {
+    return parts[0][0].toUpperCase();
+  }
+
+  return (parts[0][0] + parts[1][0]).toUpperCase();
 }
+
+
 
 export function VideoTile({
   stream,
