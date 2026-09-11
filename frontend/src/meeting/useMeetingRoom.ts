@@ -660,6 +660,28 @@ for (let i = 1; i < videoTransceivers.length; i++) {
       return;
     }
 
+    // A video track can already be sitting in the stream, just disabled —
+    // e.g. camera starts off by default at join, but permission was already
+    // granted and the track never removed. Re-enabling it is all that's
+    // needed (senders already carry it from initial setup). Calling
+    // getUserMedia again here on top of it would add a SECOND video track
+    // to the stream, and a <video> element only ever renders the first
+    // track in a multi-video-track MediaStream — which stays the old,
+    // still-disabled one, showing black until something happens to reorder
+    // the tracks (e.g. a later off/on cycle).
+    const existingTrack = localStreamRef.current?.getVideoTracks()[0];
+    if (existingTrack) {
+      existingTrack.enabled = true;
+      cameraTrackRef.current = existingTrack;
+      cameraOnRef.current = true;
+      setCameraOn(true);
+      setLocalStream(new MediaStream(localStreamRef.current!.getTracks()));
+      if (roomCode) {
+        getSocket().emit("media-state", { room_code: roomCode, mic_on: micOnRef.current, camera_on: true });
+      }
+      return;
+    }
+
     try {
       const videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
       const newTrack = videoStream.getVideoTracks()[0];

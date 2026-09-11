@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { adminLogin, fetchMySettings, getMeeting, getMeetingAccessInfo, getQueue, joinMeeting, leaveMeeting, updateMySettings, updateProfile, uploadRecording } from "@/services/api";
+import { adminLogin, fetchMySettings, fetchTranscript, getMeeting, getMeetingAccessInfo, getQueue, joinMeeting, leaveMeeting, updateMySettings, updateProfile, uploadRecording } from "@/services/api";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useAuthStore } from "@/store/authStore";
 import { NamePrompt } from "@/components/NamePrompt";
@@ -114,6 +114,15 @@ export default function MeetingRoomPage() {
   });
   const waitingCount = queueForBadge?.filter((s) => s.status === "waiting").length ?? 0;
 
+  // Same query key as TranscriptPanel, so this shares its cache rather than
+  // fetching again — it only exists so the recorder can draw the panel.
+  const { data: transcriptEntries } = useQuery({
+    queryKey: ["transcript", roomCode],
+    queryFn: () => fetchTranscript(roomCode as string),
+    enabled: transcriptOpen && !!roomCode,
+    refetchInterval: 5000,
+  });
+
   useEffect(() => {
     if (user && !displayName) setDisplayName(user.full_name);
   }, [user, displayName]);
@@ -158,7 +167,35 @@ export default function MeetingRoomPage() {
     accessToken: accessTokenParam,
   });
 
-  const { recording, start: startRecording, stop: stopRecording } = useRecorder({ localStream, remoteStreams });
+  const { recording, start: startRecording, stop: stopRecording } = useRecorder({
+    localStream,
+    remoteStreams,
+    screenStream,
+    remoteScreenStreams,
+    localName: displayName || user?.full_name || "You",
+    micOn,
+    cameraOn,
+    screenSharing,
+    participants,
+    chatOpen,
+    messages,
+    participantsOpen,
+    captionsOn,
+    captions,
+    myLanguage: mySettings?.caption_language ?? "en",
+    showOriginalCaptions,
+    captionPosition: mySettings?.caption_position ?? "bottom",
+    captionFontSize: mySettings?.caption_font_size ?? 16,
+    roomCode: roomCode ?? "",
+    connected,
+    reconnecting,
+    elapsed,
+    showQueue,
+    queueOpen,
+    queue: queueForBadge ?? [],
+    transcriptOpen,
+    transcript: transcriptEntries ?? [],
+  });
   const recordingRef = useRef(recording);
   recordingRef.current = recording;
   const roomCodeRef = useRef(roomCode);

@@ -23,6 +23,8 @@ export default function PatientLinkPage() {
   const [joined, setJoined] = useState<JoinPatientLinkResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [joining, setJoining] = useState(false);
+  const [deviceNotice, setDeviceNotice] = useState<string | null>(null);
+  const [devicesChecked, setDevicesChecked] = useState(false);
 
   const { data: linkInfo } = useQuery({
     queryKey: ["patient-link-info", code],
@@ -42,6 +44,37 @@ export default function PatientLinkPage() {
       .catch(() => createUser("Patient").then(setUser))
       .finally(() => setIdentityReady(true));
   }, [code, identityReady, setUser]);
+
+  // Ask for mic/camera permission as soon as the patient lands here (before
+  // they even click Join), so it's already granted by the time they're
+  // admitted into the actual call — no surprise prompt or delay there.
+  // Neither device is required: missing/denied camera and/or mic are both
+  // handled gracefully and the patient can still join audio/video-less.
+  useEffect(() => {
+    if (!identityReady || devicesChecked) return;
+    setDevicesChecked(true);
+    (async () => {
+      let stream: MediaStream | null = null;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      } catch {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
+          setDeviceNotice("No camera was found — you can still join with audio only.");
+        } catch {
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+            setDeviceNotice("No microphone was found — you can still join with video only.");
+          } catch {
+            setDeviceNotice("No camera or microphone was found — you can still join without them.");
+          }
+        }
+      }
+      // only priming permission here — the actual stream is (re)acquired on
+      // the meeting page itself, since a MediaStream can't survive navigation
+      stream?.getTracks().forEach((t) => t.stop());
+    })();
+  }, [identityReady, devicesChecked]);
 
   useEffect(() => {
     if (!joined || joined.session.status === "active") return;
@@ -119,6 +152,10 @@ export default function PatientLinkPage() {
               <p className="mt-2 text-sm text-[#64748b]">
                 {linkInfo ? `You're joining with ${linkInfo.title}` : ""}
               </p>
+
+              {deviceNotice && (
+                <p className="mt-4 text-xs text-[#b45309]">{deviceNotice}</p>
+              )}
 
               {linkInfo && (
                 <div className="mt-6 text-left">

@@ -1,4 +1,6 @@
+import tempfile
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
@@ -9,6 +11,7 @@ from app.models import ConsultationSession, ConsultationStatus, Meeting, Meeting
 from app.schemas.meeting import CreateMeetingRequest, MeetingResponse, UpdateMeetingRequest
 from app.schemas.transcript import MeetingSummaryResponse, TranscriptEntryResponse
 from app.storage.local_storage import get_file_path, list_files, save_file
+from app.storage.video_convert import convert_webm_to_mp4
 from app.users.dependencies import get_current_user
 
 router = APIRouter(prefix="/meetings", tags=["meetings"])
@@ -213,8 +216,14 @@ async def upload_recording(
     )
     subpath_id = active_session.id if active_session else meeting.id
     data = await file.read()
-    filename = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}.webm"
-    save_file(f"meeting-recording/{subpath_id}", filename, data)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        webm_path = Path(tmpdir) / "recording.webm"
+        webm_path.write_bytes(data)
+        mp4_path = convert_webm_to_mp4(webm_path)
+        filename = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}.mp4"
+        save_file(f"meeting-recording/{subpath_id}", filename, mp4_path.read_bytes())
+
     return {"filename": filename}
 
 
@@ -239,4 +248,5 @@ def download_recording(
     file_path = get_file_path(f"meeting-recording/{meeting.id}", filename)
     if file_path is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found")
-    return FileResponse(file_path, media_type="video/webm", filename=filename)
+    media_type = "video/mp4" if filename.endswith(".mp4") else "video/webm"
+    return FileResponse(file_path, media_type=media_type, filename=filename)

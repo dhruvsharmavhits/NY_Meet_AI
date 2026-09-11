@@ -249,4 +249,5 @@ def download_session_recording(session_id: str, filename: str, db: Session = Dep
     file_path = get_file_path(f"meeting-recording/{session_id}", filename)
     if file_path is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found")
-    return FileResponse(file_path, media_type="video/webm", filename=filename)
+    media_type = "video/mp4" if filename.endswith(".mp4") else "video/webm"
+    return FileResponse(file_path, media_type=media_type, filename=filename)
