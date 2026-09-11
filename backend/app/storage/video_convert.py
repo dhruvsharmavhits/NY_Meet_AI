@@ -9,7 +9,7 @@ def _stream_duration(path: Path, kind: str) -> float:
     since MediaRecorder webm usually carries no stream duration metadata."""
     probe = subprocess.run(
         [
-            "ffprobe", "-v", "error",
+            "/usr/bin/ffprobe", "-v", "error",
             "-select_streams", kind,
             "-show_entries", "stream=duration",
             "-show_entries", "packet=pts_time",
@@ -33,7 +33,7 @@ def _stream_duration(path: Path, kind: str) -> float:
 
     count = subprocess.run(
         [
-            "ffprobe", "-v", "error",
+            "/usr/bin/ffprobe", "-v", "error",
             "-select_streams", kind,
             "-show_entries", "packet=pts_time",
             "-of", "csv=p=0",
