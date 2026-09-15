@@ -60,45 +60,67 @@ export function startAudioCapture(stream: MediaStream, roomCode: string, socket:
 
   navigator.mediaDevices
     .getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
-    .then((captureStream) => {
+    .then(async (captureStream) => {
       if (stopped) {
         captureStream.getTracks().forEach((t) => t.stop());
         return;
       }
       const captureTrack = captureStream.getAudioTracks()[0];
+      console.log(
+        `[rtc] audioCapture stt track ${JSON.stringify({
+          enabled: captureTrack?.enabled,
+          muted: captureTrack?.muted,
+          readyState: captureTrack?.readyState,
+          settings: captureTrack?.getSettings?.(),
+        })}`
+      );
 
       const AudioContextCtor = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       const audioContext = new AudioContextCtor();
+      await audioContext.audioWorklet.addModule("/audio-capture-worklet.js");
+      if (stopped) {
+        audioContext.close();
+        captureStream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+
       const source = audioContext.createMediaStreamSource(captureStream);
-      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      const worklet = new AudioWorkletNode(audioContext, "capture-processor", {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        channelCount: 1,
+      });
       const silentGain = audioContext.createGain();
       silentGain.gain.value = 0;
 
-      processor.onaudioprocess = (event) => {
+      worklet.port.onmessage = (event: MessageEvent<Float32Array>) => {
         // Skip entirely while the mic is toggled off — don't waste bandwidth or
         // feed silence into the transcription pipeline (which can otherwise
         // hallucinate captions from near-silence/background noise).
         if (!audioTrack.enabled) return;
 
-        const input = event.inputBuffer.getChannelData(0);
-        const downsampled = downsampleBuffer(input, audioContext.sampleRate, TARGET_SAMPLE_RATE);
+        const downsampled = downsampleBuffer(event.data, audioContext.sampleRate, TARGET_SAMPLE_RATE);
         const pcm16 = floatTo16BitPCM(downsampled);
         socket.emit("audio-chunk", { room_code: roomCode, chunk: pcm16.buffer });
       };
 
-      source.connect(processor);
-      processor.connect(silentGain);
+      source.connect(worklet);
+      worklet.connect(silentGain);
       silentGain.connect(audioContext.destination);
+      console.log(`[rtc] audioCapture worklet running sampleRate=${audioContext.sampleRate} state=${audioContext.state}`);
 
       cleanup = () => {
-        processor.disconnect();
+        worklet.port.onmessage = null;
+        worklet.disconnect();
         source.disconnect();
         silentGain.disconnect();
         audioContext.close();
         captureTrack.stop();
       };
     })
-    .catch(() => {});
+    .catch((err) => {
+      console.error("[rtc] audioCapture failed", err);
+    });
 
   return () => {
     stopped = true;

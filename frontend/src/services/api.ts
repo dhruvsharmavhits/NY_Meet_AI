@@ -215,6 +215,11 @@ export interface JoinPatientLinkResult {
   access_token: string | null;
 }
 
+export async function fetchIceServers(): Promise<RTCIceServer[]> {
+  const { data } = await api.get<{ iceServers: RTCIceServer[] }>("/meetings/ice-servers");
+  return data.iceServers;
+}
+
 export async function getMeetingAccessInfo(roomCode: string): Promise<{ is_doctor_room: boolean; is_host: boolean }> {
   const { data } = await api.get<{ is_doctor_room: boolean; is_host: boolean }>(`/meetings/${roomCode}/access-info`);
   return data;

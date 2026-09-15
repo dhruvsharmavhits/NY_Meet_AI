@@ -34,5 +34,21 @@ class Settings(BaseSettings):
 
     admin_password: str = "admin123"
 
+    # ICE servers handed to the browser. Set TURN_URLS to a real relay
+    # (coturn or a hosted provider) for restrictive networks, e.g.
+    #   TURN_URLS='["turn:turn.example.com:3478?transport=udp","turn:turn.example.com:3478?transport=tcp","turns:turn.example.com:5349?transport=tcp"]'
+    # With coturn's static-auth-secret, set TURN_SECRET instead of
+    # TURN_USERNAME/TURN_CREDENTIAL and short-lived credentials are minted per request.
+    stun_urls: list[str] = [
+        "stun:stun.l.google.com:19302",
+        "stun:stun1.l.google.com:19302",
+        "stun:stun.cloudflare.com:3478",
+    ]
+    turn_urls: list[str] = []
+    turn_username: str | None = None
+    turn_credential: str | None = None
+    turn_secret: str | None = None
+    turn_credential_ttl_seconds: int = 3600
+
 
 settings = Settings()

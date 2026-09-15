@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { fetchTranscript } from "@/services/api";
-import { CloseIcon, DownloadIcon } from "@/components/Icons";
+import { CloseIcon } from "@/components/Icons";
 
 interface TranscriptPanelProps {
   roomCode: string;
@@ -25,20 +25,6 @@ export function TranscriptPanel({ roomCode, onClose }: TranscriptPanelProps) {
     queryFn: () => fetchTranscript(roomCode),
     refetchInterval: 5000,
   });
-
-  function handleDownload() {
-    if (!entries) return;
-    const lines = entries.map(
-      (e) => `[${new Date(e.created_at).toLocaleTimeString()}] ${e.speaker_name} (${e.lang}): ${e.text}`
-    );
-    const blob = new Blob([lines.join("\n")], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `transcript-${roomCode}.txt`;
-    link.click();
-    URL.revokeObjectURL(url);
-  }
 
   return (
     <div className="flex w-[360px] flex-col panel-slide-enter" style={{ background: "rgba(15, 12, 41, 0.85)", backdropFilter: "blur(24px)", borderLeft: "1px solid rgba(255,255,255,0.06)" }}>
@@ -94,18 +80,6 @@ export function TranscriptPanel({ roomCode, onClose }: TranscriptPanelProps) {
         ))}
       </div>
 
-      {/* Download button */}
-      <div className="px-4 py-3" style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
-        <button
-          id="download-transcript"
-          onClick={handleDownload}
-          disabled={!entries || entries.length === 0}
-          className="btn-gradient flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm disabled:opacity-30"
-        >
-          <DownloadIcon size={18} />
-          Download transcript
-        </button>
-      </div>
     </div>
   );
 }

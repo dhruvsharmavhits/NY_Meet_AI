@@ -23,6 +23,7 @@ export default function PatientLinkPage() {
   const [joined, setJoined] = useState<JoinPatientLinkResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [joining, setJoining] = useState(false);
+  const [deviceNotice, setDeviceNotice] = useState<string | null>(null);
 
   const { data: linkInfo } = useQuery({
     queryKey: ["patient-link-info", code],
@@ -42,6 +43,42 @@ export default function PatientLinkPage() {
       .catch(() => createUser("Patient").then(setUser))
       .finally(() => setIdentityReady(true));
   }, [code, identityReady, setUser]);
+
+  // Ask for mic/camera permission as soon as the page is up, before the
+  // patient presses Join, so the later auto-join into the room already has
+  // access and never blocks on a browser prompt. Neither device is required.
+  useEffect(() => {
+    if (!identityReady) return;
+    let cancelled = false;
+    (async () => {
+      const attempts: MediaStreamConstraints[] = [
+        { audio: true, video: true },
+        { audio: true, video: false },
+        { audio: false, video: true },
+      ];
+      let granted: MediaStream | null = null;
+      let lastErr: unknown = null;
+      for (const constraints of attempts) {
+        try {
+          granted = await navigator.mediaDevices.getUserMedia(constraints);
+          break;
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+      granted?.getTracks().forEach((t) => t.stop());
+      if (cancelled || granted) return;
+      const reason = lastErr instanceof DOMException ? lastErr.name : "";
+      setDeviceNotice(
+        reason === "NotAllowedError"
+          ? "Camera and microphone access was blocked. You can still join, but others won't see or hear you."
+          : "No camera or microphone was found. You can still join, but others won't see or hear you."
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [identityReady]);
 
   useEffect(() => {
     if (!joined || joined.session.status === "active") return;
@@ -135,6 +172,10 @@ export default function PatientLinkPage() {
                     <option value="hi">Hindi</option>
                     <option value="gu">Gujarati</option>
                   </select>
+
+                  {deviceNotice && (
+                    <p className="mt-4 rounded-2xl bg-[#f4b400]/10 px-4 py-3 text-xs text-[#92400e]">{deviceNotice}</p>
+                  )}
 
                   <button
                     id="patient-join-button"

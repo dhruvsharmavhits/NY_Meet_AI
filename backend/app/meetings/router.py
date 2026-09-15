@@ -8,10 +8,16 @@ from app.database import get_db
 from app.models import ConsultationSession, ConsultationStatus, Meeting, MeetingParticipant, MeetingStatus, PatientLink, TranscriptEntry, User
 from app.schemas.meeting import CreateMeetingRequest, MeetingResponse, UpdateMeetingRequest
 from app.schemas.transcript import MeetingSummaryResponse, TranscriptEntryResponse
+from app.meetings.ice import build_ice_servers
 from app.storage.local_storage import get_file_path, list_files, save_file
 from app.users.dependencies import get_current_user
 
 router = APIRouter(prefix="/meetings", tags=["meetings"])
+
+
+@router.get("/ice-servers")
+def get_ice_servers(current_user: User = Depends(get_current_user)) -> dict[str, list[dict]]:
+    return {"iceServers": build_ice_servers(current_user.id)}
 
 
 def _get_meeting_or_404(room_code: str, db: Session) -> Meeting:

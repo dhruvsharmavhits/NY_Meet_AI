@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getSocket, disconnectSocket } from "@/services/socket";
 import { startAudioCapture } from "@/meeting/audioCapture";
+import { attachPeerDiagnostics, logDevices, logStream, logTrackEvent } from "@/meeting/mediaDiagnostics";
+import { fetchIceServers } from "@/services/api";
 import type { Caption, ChatMessage, Participant } from "@/meeting/types";
 
 
@@ -86,10 +88,48 @@ export function useMeetingRoom({
   const localIceCandidateCountsRef = useRef<Record<string, number>>({});
   const remoteIceCandidateCountsRef = useRef<Record<string, number>>({});
   const ontrackFiredRef = useRef<Record<string, Set<string>>>({});
+  const peerDiagnosticsRef = useRef<Record<string, () => void>>({});
+  const iceServersRef = useRef<RTCIceServer[]>(ICE_SERVERS.iceServers ?? []);
+  const offererForRef = useRef<Record<string, boolean>>({});
+  const iceRestartAttemptsRef = useRef<Record<string, number>>({});
+  const iceRestartTimersRef = useRef<Record<string, number>>({});
 
+
+  // ICE restart is the standard recovery when connectivity checks fail (bad
+  // relay, NAT rebinding, network switch). Only the original offerer drives
+  // it; the answerer asks the offerer to do it over the existing signal
+  // channel. Bounded attempts with backoff so a genuinely unreachable peer
+  // doesn't loop forever.
+  const requestIceRestart = useCallback((sid: string, pc: RTCPeerConnection) => {
+    const attempts = iceRestartAttemptsRef.current[sid] ?? 0;
+    if (attempts >= 3 || pc.signalingState === "closed") return;
+    if (iceRestartTimersRef.current[sid]) return;
+
+    const delay = 1000 * Math.pow(2, attempts);
+    iceRestartTimersRef.current[sid] = window.setTimeout(async () => {
+      delete iceRestartTimersRef.current[sid];
+      if (peerConnections.current[sid] !== pc || pc.signalingState === "closed") return;
+      if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") return;
+      iceRestartAttemptsRef.current[sid] = attempts + 1;
+      console.log(`[diag] pc ${sid.slice(0, 6)} ICE restart attempt ${attempts + 1}`);
+
+      if (!offererForRef.current[sid]) {
+        getSocket().emit("signal", { to: sid, type: "ice-restart", payload: {} });
+        return;
+      }
+      try {
+        pc.restartIce();
+        const offer = await pc.createOffer({ iceRestart: true });
+        await pc.setLocalDescription(offer);
+        getSocket().emit("signal", { to: sid, type: "offer", payload: pc.localDescription });
+      } catch (err) {
+        console.log(`[diag] pc ${sid.slice(0, 6)} ICE restart failed ${String(err)}`);
+      }
+    }, delay);
+  }, []);
 
   const createPeerConnection = useCallback((sid: string) => {
-    const pc = new RTCPeerConnection(ICE_SERVERS);
+    const pc = new RTCPeerConnection({ ...ICE_SERVERS, iceServers: iceServersRef.current });
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
@@ -103,13 +143,20 @@ export function useMeetingRoom({
     pc.onicegatheringstatechange = () => {
     };
     pc.oniceconnectionstatechange = () => {
+      if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
+        iceRestartAttemptsRef.current[sid] = 0;
+      } else if (pc.iceConnectionState === "failed") {
+        requestIceRestart(sid, pc);
+      }
     };
     pc.onconnectionstatechange = () => {
+      if (pc.connectionState === "failed") requestIceRestart(sid, pc);
     };
     pc.onsignalingstatechange = () => {
     };
     pc.ontrack = (event) => {
       (ontrackFiredRef.current[sid] ??= new Set()).add(event.track.kind);
+      logTrackEvent(`ontrack from ${sid.slice(0, 6)}`, event.track);
       let isScreen = false;
 
       if (event.track.kind === "video") {
@@ -128,20 +175,28 @@ export function useMeetingRoom({
 
       }
 
-      const streamsRef = isScreen
-        ? remoteScreenMediaStreamsRef
-        : remoteMediaStreamsRef;
-      const prevStream = streamsRef.current[sid];
-      const existingTracks = prevStream ? prevStream.getTracks().filter((t) => t !== event.track) : [];
-      const stream = new MediaStream([...existingTracks, event.track]);
-      streamsRef.current[sid] = stream;
       if (isScreen) {
+        // A peer may share several times over the call; each share must
+        // replace the previous track, never accumulate next to it (a <video>
+        // only plays the first track of its stream, so stale muted tracks
+        // in front of the live one render as a black screen).
+        const stream = new MediaStream([event.track]);
+        remoteScreenMediaStreamsRef.current[sid] = stream;
         setRemoteScreenStreams((prev) => ({ ...prev, [sid]: stream }));
-      } else {
-        setRemoteStreams((prev) => ({ ...prev, [sid]: stream }));
+        return;
       }
+
+      const prevStream = remoteMediaStreamsRef.current[sid];
+      const existingTracks = prevStream
+        ? prevStream.getTracks().filter((t) => t !== event.track && t.kind !== event.track.kind)
+        : [];
+      const stream = new MediaStream([...existingTracks, event.track]);
+      remoteMediaStreamsRef.current[sid] = stream;
+      setRemoteStreams((prev) => ({ ...prev, [sid]: stream }));
     };
 
+    peerDiagnosticsRef.current[sid]?.();
+    peerDiagnosticsRef.current[sid] = attachPeerDiagnostics(sid, pc);
     peerConnections.current[sid] = pc;
     return pc;
   }, []);
@@ -260,6 +315,12 @@ export function useMeetingRoom({
   );
 
   const closePeerConnection = useCallback((sid: string) => {
+    peerDiagnosticsRef.current[sid]?.();
+    delete peerDiagnosticsRef.current[sid];
+    if (iceRestartTimersRef.current[sid]) window.clearTimeout(iceRestartTimersRef.current[sid]);
+    delete iceRestartTimersRef.current[sid];
+    delete iceRestartAttemptsRef.current[sid];
+    delete offererForRef.current[sid];
     peerConnections.current[sid]?.close();
     delete peerConnections.current[sid];
     delete videoSendersRef.current[sid];
@@ -296,6 +357,14 @@ export function useMeetingRoom({
 
     async function start() {
       if (cancelled) return;
+      try {
+        const servers = await fetchIceServers();
+        if (servers.length > 0) iceServersRef.current = servers;
+        console.log(`[diag] ice servers ${JSON.stringify(servers.map((s) => s.urls))}`);
+      } catch (err) {
+        console.log(`[diag] ice-servers fetch failed, using defaults ${String(err)}`);
+      }
+      if (cancelled) return;
       micOnRef.current = initialMicOn;
       cameraOnRef.current = initialCameraOn;
       setMicOn(initialMicOn);
@@ -304,6 +373,9 @@ export function useMeetingRoom({
 
       if (stream) {
         localStreamRef.current = stream;
+        logStream("local stream at call start", stream);
+        stream.getTracks().forEach((t) => logTrackEvent("local track", t));
+        logDevices("at call start");
         cameraTrackRef.current = stream.getVideoTracks()[0] ?? null;
         const audioTrack = stream.getAudioTracks()[0];
         setLocalStream(stream);
@@ -378,6 +450,7 @@ export function useMeetingRoom({
               },
             }));
             const pc = createPeerConnection(peer.sid);
+            offererForRef.current[peer.sid] = true;
 
             await attachOutgoingTracksAsOfferer(peer.sid, pc);
 
@@ -430,25 +503,28 @@ export function useMeetingRoom({
             await pc.setRemoteDescription(new RTCSessionDescription(payload as RTCSessionDescriptionInit));
             await attachOutgoingTracksAsAnswerer(from, pc);
 
-const videoTransceivers = pc
-  .getTransceivers()
-  .filter((t) => t.receiver.track?.kind === "video");
-
-// Any video transceiver beyond the first (camera) one is a screen-share
-// m-line. If we're sharing too, attach our track to it; otherwise make sure
-// it's explicitly recvonly so the answer actually accepts the incoming
-// video — leaving direction on its ambiguous default here is what was
-// causing the remote screen share to negotiate but never render.
-for (let i = 1; i < videoTransceivers.length; i++) {
-  const t = videoTransceivers[i];
-  if (screenSharingRef.current && screenTrackRef.current) {
-    t.direction = "sendrecv";
-    await t.sender.replaceTrack(screenTrackRef.current);
-    screenSendersRef.current[from] = t.sender;
-  } else {
-    t.direction = "recvonly";
-  }
-}
+            // Any video transceiver beyond the first (camera) one is a
+            // screen-share m-line. Exactly one of them may carry our own
+            // screen track (the one we already used with this peer, or the
+            // recvonly one a newly joined peer opened for our ongoing share);
+            // every other one is explicitly recvonly so the answer accepts the
+            // incoming video.
+            const screenTransceivers = pc
+              .getTransceivers()
+              .filter((t) => t.receiver.track?.kind === "video")
+              .slice(1);
+            const sharing = screenSharingRef.current && screenTrackRef.current;
+            let own = screenTransceivers.find((t) => t.sender === screenSendersRef.current[from]);
+            if (sharing && !own) own = screenTransceivers[screenTransceivers.length - 1];
+            for (const t of screenTransceivers) {
+              if (sharing && t === own) {
+                t.direction = "sendrecv";
+                await t.sender.replaceTrack(screenTrackRef.current);
+                screenSendersRef.current[from] = t.sender;
+              } else {
+                t.direction = "recvonly";
+              }
+            }
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
             socket.emit("signal", { to: from, type: "answer", payload: pc.localDescription });
@@ -458,6 +534,17 @@ for (let i = 1; i < videoTransceivers.length; i++) {
               return;
             }
             await pc.setRemoteDescription(new RTCSessionDescription(payload as RTCSessionDescriptionInit));
+          } else if (type === "ice-restart") {
+            const pc = peerConnections.current[from];
+            if (!pc || !offererForRef.current[from] || pc.signalingState !== "stable") return;
+            try {
+              pc.restartIce();
+              const offer = await pc.createOffer({ iceRestart: true });
+              await pc.setLocalDescription(offer);
+              socket.emit("signal", { to: from, type: "offer", payload: pc.localDescription });
+            } catch (err) {
+              console.log(`[diag] pc ${from.slice(0, 6)} ICE restart (requested) failed ${String(err)}`);
+            }
           } else if (type === "ice-candidate") {
             const pc = peerConnections.current[from];
             if (!pc) {
@@ -638,13 +725,13 @@ for (let i = 1; i < videoTransceivers.length; i++) {
 
   const toggleCamera = useCallback(async () => {
     if (cameraOnRef.current) {
-      const track = localStreamRef.current?.getVideoTracks()[0];
-      if (track) {
-        track.stop();
-        localStreamRef.current?.removeTrack(track);
-        if (localStreamRef.current) {
-          setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
-        }
+      const local = localStreamRef.current;
+      if (local) {
+        local.getVideoTracks().forEach((track) => {
+          track.stop();
+          local.removeTrack(track);
+        });
+        setLocalStream(new MediaStream(local.getTracks()));
       }
       cameraTrackRef.current = null;
 
@@ -661,23 +748,32 @@ for (let i = 1; i < videoTransceivers.length; i++) {
     }
 
     try {
-      const videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
-      const newTrack = videoStream.getVideoTracks()[0];
-      cameraTrackRef.current = newTrack;
-
-      if (localStreamRef.current) {
-        localStreamRef.current.addTrack(newTrack);
-        setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
+      // The join flow hands us a camera track that is already granted but
+      // disabled. Re-enable it instead of acquiring a second one — otherwise
+      // the stream ends up with two video tracks and the tile renders the
+      // first (disabled) one as a black screen.
+      let newTrack = localStreamRef.current?.getVideoTracks().find((t) => t.readyState === "live") ?? null;
+      if (newTrack) {
+        newTrack.enabled = true;
+        setLocalStream(new MediaStream(localStreamRef.current!.getTracks()));
       } else {
-        const newStream = new MediaStream([newTrack]);
-        localStreamRef.current = newStream;
-        setLocalStream(newStream);
+        const videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
+        newTrack = videoStream.getVideoTracks()[0];
+        if (localStreamRef.current) {
+          localStreamRef.current.getVideoTracks().forEach((t) => localStreamRef.current?.removeTrack(t));
+          localStreamRef.current.addTrack(newTrack);
+          setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
+        } else {
+          const newStream = new MediaStream([newTrack]);
+          localStreamRef.current = newStream;
+          setLocalStream(newStream);
+        }
       }
+      cameraTrackRef.current = newTrack;
+      const cameraTrack = newTrack;
 
       Object.values(videoSendersRef.current).forEach((sender) => {
-        sender.replaceTrack(newTrack).catch((err) => {
-        });
-
+        sender.replaceTrack(cameraTrack).catch(() => {});
         if (localStreamRef.current) {
           sender.setStreams(localStreamRef.current);
         }
@@ -740,11 +836,19 @@ for (let i = 1; i < videoTransceivers.length; i++) {
             return;
           }
 
-          const screenTransceiver = pc.addTransceiver(screenTrack, {
-            direction: "sendrecv",
-          });
-
-          screenSendersRef.current[sid] = screenTransceiver.sender;
+          // Re-use the m-line from a previous share with this peer rather
+          // than adding a new one every time.
+          const existingSender = screenSendersRef.current[sid];
+          const existing = existingSender
+            ? pc.getTransceivers().find((t) => t.sender === existingSender && t.currentDirection !== "stopped")
+            : undefined;
+          if (existing) {
+            existing.direction = "sendrecv";
+            await existing.sender.replaceTrack(screenTrack);
+          } else {
+            const screenTransceiver = pc.addTransceiver(screenTrack, { direction: "sendrecv" });
+            screenSendersRef.current[sid] = screenTransceiver.sender;
+          }
 
           const offer = await pc.createOffer();
           await pc.setLocalDescription(offer);

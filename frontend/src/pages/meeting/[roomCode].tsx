@@ -213,11 +213,24 @@ export default function MeetingRoomPage() {
     if (!isPatientMode || !authorized || phase !== "lobby" || !user || !meeting || autoJoinStartedRef.current) return;
     autoJoinStartedRef.current = true;
     (async () => {
+      // A missing camera (NotFoundError) must never take the mic down with it —
+      // fall back the same way the lobby does.
       let stream: MediaStream | null = null;
       try {
         stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
-      } catch {
-        stream = null;
+      } catch (err) {
+        console.log("[diag] auto-join getUserMedia(video+audio) FAILED", String(err));
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        } catch (audioErr) {
+          console.log("[diag] auto-join getUserMedia(audio only) FAILED", String(audioErr));
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: true });
+          } catch (videoErr) {
+            console.log("[diag] auto-join getUserMedia(video only) FAILED", String(videoErr));
+            stream = null;
+          }
+        }
       }
       // permission is requested up front so the tracks exist and can be
       // enabled instantly later, but mic/camera start OFF by default —

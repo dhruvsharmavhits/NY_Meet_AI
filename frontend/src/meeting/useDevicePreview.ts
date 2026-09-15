@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { logDevices, logStream } from "@/meeting/mediaDiagnostics";
 
 // Explicitly requesting these (instead of relying on implicit browser
 // defaults) is our echo cancellation / noise suppression / gain control —
@@ -44,19 +45,25 @@ export function useDevicePreview(enabled: boolean): UseDevicePreviewResult {
 
     async function acquire() {
       let s: MediaStream | null = null;
+      await logDevices("lobby before getUserMedia");
       try {
         s = await navigator.mediaDevices.getUserMedia({ video: true, audio: AUDIO_CONSTRAINTS });
+        logStream("lobby getUserMedia(video+audio) OK", s);
       } catch (videoAudioErr) {
-  
+        console.log("[diag] lobby getUserMedia(video+audio) FAILED", String(videoAudioErr));
   try {
     s = await navigator.mediaDevices.getUserMedia({
       video: false,
       audio: AUDIO_CONSTRAINTS
     });
-        } catch {
+    logStream("lobby getUserMedia(audio only) OK", s);
+        } catch (audioErr) {
+          console.log("[diag] lobby getUserMedia(audio only) FAILED", String(audioErr));
           try {
             s = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+            logStream("lobby getUserMedia(video only) OK", s);
           } catch (err) {
+            console.log("[diag] lobby getUserMedia(video only) FAILED", String(err));
             if (!cancelled) {
               const reason = err instanceof DOMException ? err.name : "unknown error";
               const hint =

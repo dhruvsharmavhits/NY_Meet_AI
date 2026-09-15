@@ -1,0 +1,7 @@
+{
+  "name": "linguameet-turn",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": { "start": "node server.js" },
+  "dependencies": { "node-turn": "^0.0.6" }
+}
