@@ -32,6 +32,7 @@ interface ToolbarProps {
   onToggleQueue?: () => void;
   showOriginalCaptions: boolean;
   captionsOn: boolean;
+  showRecording?: boolean;
   recording: boolean;
   participantCount: number;
   onToggleMic: () => void;
@@ -45,6 +46,7 @@ interface ToolbarProps {
   onToggleRecording: () => void;
   onShowSummary: () => void;
   onLeave: () => void;
+  onMoreOpenChange?: (open: boolean) => void;
 }
 
 function ToolbarButton({
@@ -102,6 +104,7 @@ export function Toolbar({
   onToggleQueue,
   showOriginalCaptions,
   captionsOn,
+  showRecording = true,
   recording,
   participantCount,
   onToggleMic,
@@ -115,9 +118,18 @@ export function Toolbar({
   onToggleRecording,
   onShowSummary,
   onLeave,
+  onMoreOpenChange,
 }: ToolbarProps) {
-  const [moreOpen, setMoreOpen] = useState(false);
+  const [moreOpen, setMoreOpenState] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
+
+  function setMoreOpen(value: boolean | ((v: boolean) => boolean)) {
+    setMoreOpenState((prev) => {
+      const next = typeof value === "function" ? value(prev) : value;
+      onMoreOpenChange?.(next);
+      return next;
+    });
+  }
 
   useEffect(() => {
     if (!moreOpen) return;
@@ -237,24 +249,28 @@ export function Toolbar({
                 <SummaryIcon size={20} className="text-[#8ab4f8]" />
                 <span className="font-medium">Meeting summary</span>
               </button>
-              <div className="my-1 mx-4 border-t border-white/8" />
-              <button
-                onClick={() => {
-                  onToggleRecording();
-                  setMoreOpen(false);
-                }}
-                className="flex w-full items-center gap-3 px-5 py-3 hover:bg-white/8 transition-colors"
-              >
-                {recording ? (
-                  <StopIcon size={20} className="text-[#ea4335]" />
-                ) : (
-                  <RecordIcon size={20} className="text-[#ea4335]" />
-                )}
-                <span className="font-medium">{recording ? "Stop recording" : "Record meeting"}</span>
-                {recording && (
-                  <span className="ml-auto flex h-2.5 w-2.5 rounded-full bg-[#ea4335] animate-pulse" />
-                )}
-              </button>
+              {showRecording && (
+                <>
+                  <div className="my-1 mx-4 border-t border-white/8" />
+                  <button
+                    onClick={() => {
+                      onToggleRecording();
+                      setMoreOpen(false);
+                    }}
+                    className="flex w-full items-center gap-3 px-5 py-3 hover:bg-white/8 transition-colors"
+                  >
+                    {recording ? (
+                      <StopIcon size={20} className="text-[#ea4335]" />
+                    ) : (
+                      <RecordIcon size={20} className="text-[#ea4335]" />
+                    )}
+                    <span className="font-medium">{recording ? "Stop recording" : "Record meeting"}</span>
+                    {recording && (
+                      <span className="ml-auto flex h-2.5 w-2.5 rounded-full bg-[#ea4335] animate-pulse" />
+                    )}
+                  </button>
+                </>
+              )}
             </div>
           )}
         </div>

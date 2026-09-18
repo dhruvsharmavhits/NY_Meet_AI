@@ -10,6 +10,7 @@ from app.schemas.meeting import CreateMeetingRequest, MeetingResponse, UpdateMee
 from app.schemas.transcript import MeetingSummaryResponse, TranscriptEntryResponse
 from app.meetings.ice import build_ice_servers
 from app.storage.local_storage import get_file_path, list_files, save_file
+from app.storage.video_convert import convert_to_mp4
 from app.users.dependencies import get_current_user
 
 router = APIRouter(prefix="/meetings", tags=["meetings"])
@@ -219,7 +220,15 @@ async def upload_recording(
     )
     subpath_id = active_session.id if active_session else meeting.id
     data = await file.read()
-    filename = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}.webm"
+    is_mp4 = (file.filename or "").endswith(".mp4") or file.content_type == "video/mp4"
+    extension = "mp4"
+    if not is_mp4:
+        try:
+            data = convert_to_mp4(data, ".webm")
+        except Exception:
+            # Never drop a recording because ffmpeg is missing or failed.
+            extension = "webm"
+    filename = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}.{extension}"
     save_file(f"meeting-recording/{subpath_id}", filename, data)
     return {"filename": filename}
 
@@ -245,4 +254,5 @@ def download_recording(
     file_path = get_file_path(f"meeting-recording/{meeting.id}", filename)
     if file_path is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found")
-    return FileResponse(file_path, media_type="video/webm", filename=filename)
+    media_type = "video/mp4" if filename.endswith(".mp4") else "video/webm"
+    return FileResponse(file_path, media_type=media_type, filename=filename)

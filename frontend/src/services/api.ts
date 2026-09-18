@@ -158,7 +158,8 @@ export async function fetchSummary(roomCode: string): Promise<MeetingSummary> {
 
 export async function uploadRecording(roomCode: string, blob: Blob): Promise<{ filename: string }> {
   const formData = new FormData();
-  formData.append("file", blob, "recording.webm");
+  const extension = blob.type.startsWith("video/mp4") ? "mp4" : "webm";
+  formData.append("file", blob, `recording.${extension}`);
   const { data } = await api.post<{ filename: string }>(`/meetings/${roomCode}/recordings`, formData, {
     headers: { "Content-Type": "multipart/form-data" },
   });

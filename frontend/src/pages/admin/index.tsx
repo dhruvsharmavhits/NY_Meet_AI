@@ -7,12 +7,12 @@ import {
   completeSession,
   createDoctorRoom,
   createPatientLink,
-  downloadSessionRecording,
+  downloadRecording,
   fetchSessionTranscript,
   getQueue,
   listDoctorRooms,
   listPatientLinks,
-  listSessionRecordings,
+  listRecordings,
   Meeting,
 } from "@/services/api";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -70,6 +70,25 @@ export default function AdminDashboardPage() {
     enabled: !!selectedRoom,
     refetchInterval: 4000,
   });
+
+  const { data: recordings } = useQuery({
+    queryKey: ["recordings", selectedRoom?.room_code],
+    queryFn: () => listRecordings(selectedRoom!.room_code),
+    enabled: !!selectedRoom,
+    refetchInterval: 10000,
+  });
+
+  const [downloadingRecording, setDownloadingRecording] = useState<string | null>(null);
+
+  async function handleDownloadRoomRecording(filename: string) {
+    if (!selectedRoom) return;
+    setDownloadingRecording(filename);
+    try {
+      await downloadRecording(selectedRoom.room_code, filename);
+    } finally {
+      setDownloadingRecording(null);
+    }
+  }
 
   async function handleCreateRoom(e: FormEvent) {
     e.preventDefault();
@@ -146,23 +165,6 @@ export default function AdminDashboardPage() {
       URL.revokeObjectURL(url);
     } catch {
       setDownloadErrorId(`t-${sessionId}`);
-    } finally {
-      setDownloadingId(null);
-    }
-  }
-
-  async function handleDownloadRecording(sessionId: string) {
-    setDownloadErrorId(null);
-    setDownloadingId(`r-${sessionId}`);
-    try {
-      const files = await listSessionRecordings(sessionId);
-      if (files.length === 0) {
-        setDownloadErrorId(`r-${sessionId}`);
-        return;
-      }
-      await downloadSessionRecording(sessionId, files[files.length - 1]);
-    } catch {
-      setDownloadErrorId(`r-${sessionId}`);
     } finally {
       setDownloadingId(null);
     }
@@ -340,6 +342,26 @@ export default function AdminDashboardPage() {
               </div>
             </section>
 
+            <section className="glass-card rounded-3xl p-6">
+              <h2 className="mb-4 text-xs font-bold text-[#94a3b8] uppercase tracking-[0.15em]">Recordings</h2>
+              <div className="divide-y divide-black/5">
+                {recordings?.map((filename, i) => (
+                  <div key={filename} className="flex items-center justify-between py-3">
+                    <p className="text-sm font-semibold text-[#1a1a2e]">Recording {i + 1}</p>
+                    <button
+                      onClick={() => handleDownloadRoomRecording(filename)}
+                      disabled={downloadingRecording === filename}
+                      className="flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium text-[#64748b] hover:bg-black/5 disabled:opacity-40 transition-all duration-200"
+                    >
+                      <DownloadIcon size={16} />
+                      Download
+                    </button>
+                  </div>
+                ))}
+                {recordings?.length === 0 && <p className="py-4 text-sm text-[#94a3b8]">No recordings yet</p>}
+              </div>
+            </section>
+
             <section className="glass-card overflow-hidden rounded-3xl">
               <h2 className="px-6 pt-6 text-xs font-bold text-[#94a3b8] uppercase tracking-[0.15em]">
                 Consultation history
@@ -355,9 +377,6 @@ export default function AdminDashboardPage() {
                         {downloadErrorId === `t-${session!.id}` && (
                           <p className="mt-0.5 text-xs font-medium text-[#ea4335]">No transcript available</p>
                         )}
-                        {downloadErrorId === `r-${session!.id}` && (
-                          <p className="mt-0.5 text-xs font-medium text-[#ea4335]">No recording available</p>
-                        )}
                       </div>
                       <div className="flex items-center gap-2">
                         <button
@@ -367,14 +386,6 @@ export default function AdminDashboardPage() {
                         >
                           <DownloadIcon size={16} />
                           Transcript
-                        </button>
-                        <button
-                          onClick={() => handleDownloadRecording(session!.id)}
-                          disabled={downloadingId === `r-${session!.id}`}
-                          className="flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium text-[#64748b] hover:bg-black/5 disabled:opacity-40 transition-all duration-200"
-                        >
-                          <DownloadIcon size={16} />
-                          Recording
                         </button>
                       </div>
                     </div>

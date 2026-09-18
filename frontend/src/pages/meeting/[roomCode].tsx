@@ -2,12 +2,13 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { adminLogin, fetchMySettings, getMeeting, getMeetingAccessInfo, getQueue, joinMeeting, leaveMeeting, updateMySettings, updateProfile, uploadRecording } from "@/services/api";
+import { adminLogin, fetchMySettings, fetchTranscript, getMeeting, getMeetingAccessInfo, getQueue, joinMeeting, leaveMeeting, updateMySettings, updateProfile, uploadRecording } from "@/services/api";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useAuthStore } from "@/store/authStore";
 import { NamePrompt } from "@/components/NamePrompt";
 import { useMeetingRoom } from "@/meeting/useMeetingRoom";
 import { useRecorder } from "@/meeting/useRecorder";
+import type { CompositorState } from "@/meeting/recordingCompositor";
 import { PreJoinLobby } from "@/meeting/PreJoinLobby";
 import { VideoGrid } from "@/meeting/VideoGrid";
 import { Toolbar } from "@/meeting/Toolbar";
@@ -54,6 +55,7 @@ export default function MeetingRoomPage() {
   const [showOriginalCaptions, setShowOriginalCaptions] = useState(false);
   const [captionsOn, setCaptionsOn] = useState(true);
   const [recordingError, setRecordingError] = useState<string | null>(null);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [currentTime, setCurrentTime] = useState(formatTime());
   const callStartRef = useRef<number | null>(null);
@@ -158,11 +160,88 @@ export default function MeetingRoomPage() {
     accessToken: accessTokenParam,
   });
 
-  const { recording, start: startRecording, stop: stopRecording } = useRecorder({ localStream, remoteStreams });
+  const { recording, start: startRecording, stop: stopRecording, updateState: updateRecorderState } = useRecorder();
   const recordingRef = useRef(recording);
   recordingRef.current = recording;
   const roomCodeRef = useRef(roomCode);
   roomCodeRef.current = roomCode;
+
+  const { data: recordedTranscript } = useQuery({
+    queryKey: ["transcript", roomCode],
+    queryFn: () => fetchTranscript(roomCode as string),
+    enabled: !!roomCode && recording && transcriptOpen,
+    refetchInterval: 5000,
+  });
+
+  const recorderSnapshot: CompositorState = {
+    roomCode: meeting?.room_code ?? roomCode ?? "",
+    currentTime,
+    elapsedLabel: formatDuration(elapsed),
+    connected,
+    reconnecting,
+    error: error ?? recordingError,
+    displayName: displayName || "You",
+    localStream,
+    screenStream,
+    remoteStreams,
+    remoteScreenStreams,
+    participants,
+    micOn,
+    micConnecting: !!micConnecting,
+    cameraOn,
+    screenSharing,
+    captionsOn,
+    captions,
+    myCaptionLanguage: mySettings?.caption_language ?? "en",
+    captionPosition: mySettings?.caption_position ?? "bottom",
+    captionFontSize: mySettings?.caption_font_size ?? 16,
+    showOriginalCaptions,
+    chatOpen,
+    messages,
+    participantsOpen,
+    transcriptOpen,
+    transcriptEntries: recordedTranscript ?? [],
+    queueOpen,
+    queue: queueForBadge ?? [],
+    showQueue,
+    moreMenuOpen,
+  };
+
+  useEffect(() => {
+    if (recording) updateRecorderState(recorderSnapshot);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    recording,
+    currentTime,
+    elapsed,
+    connected,
+    reconnecting,
+    error,
+    recordingError,
+    displayName,
+    localStream,
+    screenStream,
+    remoteStreams,
+    remoteScreenStreams,
+    participants,
+    micOn,
+    micConnecting,
+    cameraOn,
+    screenSharing,
+    captionsOn,
+    captions,
+    mySettings,
+    showOriginalCaptions,
+    chatOpen,
+    messages,
+    participantsOpen,
+    transcriptOpen,
+    recordedTranscript,
+    queueOpen,
+    queueForBadge,
+    showQueue,
+    moreMenuOpen,
+  ]);
 
   useEffect(() => {
     return () => {
@@ -266,7 +345,7 @@ export default function MeetingRoomPage() {
       }
     } else {
       try {
-        await startRecording();
+        await startRecording(recorderSnapshot);
       } catch {
         setRecordingError("Could not start recording.");
       }
@@ -556,6 +635,7 @@ export default function MeetingRoomPage() {
         }}
         showOriginalCaptions={showOriginalCaptions}
         captionsOn={captionsOn}
+        showRecording={!isPatientMode}
         recording={recording}
         participantCount={Object.keys(participants).length + 1}
         micConnecting={micConnecting}
@@ -585,6 +665,7 @@ export default function MeetingRoomPage() {
         onToggleRecording={handleToggleRecording}
         onShowSummary={() => setSummaryOpen(true)}
         onLeave={handleLeave}
+        onMoreOpenChange={setMoreMenuOpen}
       />
     </div>
   );
