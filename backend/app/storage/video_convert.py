@@ -1,7 +1,10 @@
 import json
 import subprocess
-import tempfile
+import threading
 from pathlib import Path
+
+# A 2-3 GB server can only afford one transcode at a time.
+_ffmpeg_slot = threading.Semaphore(1)
 
 
 def _stream_duration(path: Path, kind: str) -> float:
@@ -44,13 +47,10 @@ def _stream_duration(path: Path, kind: str) -> float:
     return max(times) if times else 0.0
 
 
-def convert_to_mp4(data: bytes, suffix: str) -> bytes:
-    """Re-encode a recording to H.264/AAC MP4. Raises on any ffmpeg failure."""
-    with tempfile.TemporaryDirectory() as tmp:
-        source = Path(tmp) / f"source{suffix}"
-        source.write_bytes(data)
-        target = Path(tmp) / "out.mp4"
-
+def convert_to_mp4(source: Path, target: Path) -> None:
+    """Re-encode a recording to H.264/AAC MP4. Raises on any ffmpeg failure.
+    Only one conversion runs at a time."""
+    with _ffmpeg_slot:
         video_len = _stream_duration(source, "v:0")
         audio_len = _stream_duration(source, "a:0")
 
@@ -69,7 +69,7 @@ def convert_to_mp4(data: bytes, suffix: str) -> bytes:
                 "-filter_complex",
                 f"[0:v]{video_filter}[v];[0:a]aresample=async=1:first_pts=0[a]",
                 "-map", "[v]", "-map", "[a]",
-                "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
                 "-pix_fmt", "yuv420p",
                 "-c:a", "aac", "-b:a", "128k", "-ar", "48000",
                 "-movflags", "+faststart",
@@ -79,4 +79,3 @@ def convert_to_mp4(data: bytes, suffix: str) -> bytes:
             capture_output=True,
             timeout=900,
         )
-        return target.read_bytes()

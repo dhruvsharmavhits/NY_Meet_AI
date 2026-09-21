@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -9,7 +10,7 @@ from app.models import ConsultationSession, ConsultationStatus, Meeting, Meeting
 from app.schemas.meeting import CreateMeetingRequest, MeetingResponse, UpdateMeetingRequest
 from app.schemas.transcript import MeetingSummaryResponse, TranscriptEntryResponse
 from app.meetings.ice import build_ice_servers
-from app.storage.local_storage import get_file_path, list_files, save_file
+from app.storage.local_storage import get_file_path, list_files, save_stream
 from app.storage.video_convert import convert_to_mp4
 from app.users.dependencies import get_current_user
 
@@ -208,6 +209,7 @@ def get_summary(
 @router.post("/{room_code}/recordings", status_code=status.HTTP_201_CREATED)
 async def upload_recording(
     room_code: str,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -219,18 +221,25 @@ async def upload_recording(
         .first()
     )
     subpath_id = active_session.id if active_session else meeting.id
-    data = await file.read()
     is_mp4 = (file.filename or "").endswith(".mp4") or file.content_type == "video/mp4"
-    extension = "mp4"
+    stem = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    extension = "mp4" if is_mp4 else "webm"
+    filename = f"{stem}.{extension}"
+    saved = save_stream(f"meeting-recording/{subpath_id}", filename, file.file)
     if not is_mp4:
-        try:
-            data = convert_to_mp4(data, ".webm")
-        except Exception:
-            # Never drop a recording because ffmpeg is missing or failed.
-            extension = "webm"
-    filename = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}.{extension}"
-    save_file(f"meeting-recording/{subpath_id}", filename, data)
+        background_tasks.add_task(_convert_recording, saved)
     return {"filename": filename}
+
+
+def _convert_recording(source: Path) -> None:
+    """Transcode after the response is sent, keeping the WebM if ffmpeg fails."""
+    target = source.with_suffix(".mp4")
+    try:
+        convert_to_mp4(source, target)
+    except Exception:
+        target.unlink(missing_ok=True)
+        return
+    source.unlink(missing_ok=True)
 
 
 @router.get("/{room_code}/recordings")

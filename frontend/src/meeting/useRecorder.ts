@@ -79,7 +79,7 @@ export function useRecorder() {
       containerRef.current = mimeType?.startsWith("video/mp4") ? "video/mp4" : "video/webm";
       const recorder = new MediaRecorder(combined, {
         ...(mimeType ? { mimeType } : {}),
-        videoBitsPerSecond: 8_000_000,
+        videoBitsPerSecond: 3_500_000,
         audioBitsPerSecond: 128_000,
       });
       chunksRef.current = [];

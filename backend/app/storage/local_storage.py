@@ -1,4 +1,6 @@
+import shutil
 from pathlib import Path
+from typing import BinaryIO
 
 from app.config import settings
 
@@ -10,6 +12,16 @@ def save_file(subpath: str, filename: str, data: bytes) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     file_path = directory / filename
     file_path.write_bytes(data)
+    return file_path
+
+
+def save_stream(subpath: str, filename: str, source: BinaryIO) -> Path:
+    """Stream an upload to storage/<subpath>/<filename> without holding it in RAM."""
+    directory = Path(settings.storage_root) / subpath
+    directory.mkdir(parents=True, exist_ok=True)
+    file_path = directory / filename
+    with file_path.open("wb") as target:
+        shutil.copyfileobj(source, target, length=1024 * 1024)
     return file_path
 
 

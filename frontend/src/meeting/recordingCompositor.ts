@@ -35,12 +35,15 @@ export interface CompositorState {
   moreMenuOpen: boolean;
 }
 
-export const RECORDING_WIDTH = 1920;
-export const RECORDING_HEIGHT = 1080;
+export const RECORDING_WIDTH = 1280;
+export const RECORDING_HEIGHT = 720;
 export const RECORDING_FPS = 30;
 
-const W = RECORDING_WIDTH;
-const H = RECORDING_HEIGHT;
+// The layout is authored at 1920x1080 and scaled down to the output size, so
+// encoding costs less without every coordinate changing.
+const W = 1920;
+const H = 1080;
+const SCALE = RECORDING_WIDTH / W;
 const HEADER_H = 52;
 const TOOLBAR_H = 72;
 const FONT_STACK = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
@@ -144,11 +147,12 @@ export class MeetingCompositor {
 
   constructor() {
     this.canvas = document.createElement("canvas");
-    this.canvas.width = W;
-    this.canvas.height = H;
+    this.canvas.width = RECORDING_WIDTH;
+    this.canvas.height = RECORDING_HEIGHT;
     const ctx = this.canvas.getContext("2d", { alpha: false });
     if (!ctx) throw new Error("2D canvas is unavailable");
     this.ctx = ctx;
+    this.ctx.setTransform(SCALE, 0, 0, SCALE, 0, 0);
     this.ctx.imageSmoothingEnabled = true;
     this.ctx.imageSmoothingQuality = "high";
   }
