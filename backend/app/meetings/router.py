@@ -242,6 +242,17 @@ def _convert_recording(source: Path) -> None:
     source.unlink(missing_ok=True)
 
 
+def _recording_subpath_ids(meeting: Meeting, db: Session) -> list[str]:
+    """Recordings are saved under the active consultation session's id when one
+    exists at upload time, else the meeting's id. Check every subpath a
+    recording for this meeting could have landed in."""
+    session_ids = [
+        row[0]
+        for row in db.query(ConsultationSession.id).filter(ConsultationSession.room_id == meeting.id).all()
+    ]
+    return [meeting.id, *session_ids]
+
+
 @router.get("/{room_code}/recordings")
 def list_recordings(
     room_code: str,
@@ -249,7 +260,10 @@ def list_recordings(
     db: Session = Depends(get_db),
 ) -> list[str]:
     meeting = _get_meeting_or_404(room_code, db)
-    return list_files(f"meeting-recording/{meeting.id}")
+    filenames: list[str] = []
+    for subpath_id in _recording_subpath_ids(meeting, db):
+        filenames.extend(list_files(f"meeting-recording/{subpath_id}"))
+    return sorted(filenames)
 
 
 @router.get("/{room_code}/recordings/{filename}")
@@ -260,7 +274,11 @@ def download_recording(
     db: Session = Depends(get_db),
 ) -> FileResponse:
     meeting = _get_meeting_or_404(room_code, db)
-    file_path = get_file_path(f"meeting-recording/{meeting.id}", filename)
+    file_path = None
+    for subpath_id in _recording_subpath_ids(meeting, db):
+        file_path = get_file_path(f"meeting-recording/{subpath_id}", filename)
+        if file_path is not None:
+            break
     if file_path is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found")
     media_type = "video/mp4" if filename.endswith(".mp4") else "video/webm"
