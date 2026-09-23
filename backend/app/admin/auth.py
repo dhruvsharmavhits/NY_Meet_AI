@@ -1,5 +1,3 @@
-import hashlib
-import hmac
 import secrets
 
 from fastapi import Depends, Header, HTTPException, status
@@ -8,21 +6,10 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.models import Admin
+from app.security import hash_secret, verify_secret
 
-
-def hash_password(password: str) -> str:
-    salt = secrets.token_hex(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 200_000).hex()
-    return f"{salt}${digest}"
-
-
-def verify_password(password: str, password_hash: str) -> bool:
-    try:
-        salt, digest = password_hash.split("$", 1)
-    except ValueError:
-        return False
-    candidate = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 200_000).hex()
-    return hmac.compare_digest(candidate, digest)
+hash_password = hash_secret
+verify_password = verify_secret
 
 
 def create_admin(db: Session, master_password: str, user_id: str, password: str) -> Admin:

@@ -14,6 +14,7 @@ import {
   listPatientLinks,
   listRecordings,
   Meeting,
+  regenerateRoomPasscode,
 } from "@/services/api";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { NamePrompt } from "@/components/NamePrompt";
@@ -37,6 +38,7 @@ export default function AdminDashboardPage() {
   const [newRoomTitle, setNewRoomTitle] = useState("");
   const [selectedRoomCode, setSelectedRoomCode] = useState<string | null>(null);
   const [newLinkLabel, setNewLinkLabel] = useState("");
+  const [revealedPasscode, setRevealedPasscode] = useState<{ roomCode: string; passcode: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [downloadErrorId, setDownloadErrorId] = useState<string | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
@@ -100,8 +102,21 @@ export default function AdminDashboardPage() {
       setNewRoomTitle("");
       queryClient.invalidateQueries({ queryKey: ["doctor-rooms"] });
       setSelectedRoomCode(room.room_code);
+      if (room.passcode) setRevealedPasscode({ roomCode: room.room_code, passcode: room.passcode });
     } catch {
       setError("Could not create room");
+    }
+  }
+
+  async function handleRegeneratePasscode() {
+    if (!selectedRoom) return;
+    setError(null);
+    try {
+      const room = await regenerateRoomPasscode(selectedRoom.room_code);
+      queryClient.invalidateQueries({ queryKey: ["doctor-rooms"] });
+      if (room.passcode) setRevealedPasscode({ roomCode: room.room_code, passcode: room.passcode });
+    } catch {
+      setError("Could not generate a passcode for this room");
     }
   }
 
@@ -200,6 +215,9 @@ export default function AdminDashboardPage() {
           <LinguaMeetLogo size={36} />
           <span className="text-xl font-bold text-[#1a1a2e] tracking-tight">Admin</span>
         </div>
+        <Link href="/admin/third-party-apps" className="text-sm font-semibold text-[#4285f4]">
+          Third-party API keys
+        </Link>
       </header>
 
       <main className="relative z-10 mx-auto flex max-w-[1100px] flex-col gap-8 px-6 py-10">
@@ -256,6 +274,27 @@ export default function AdminDashboardPage() {
                 </Link>
               </div>
               <p className="text-sm text-[#1a1a2e] font-medium">/meeting/{selectedRoom.room_code}</p>
+
+              <div className="mt-4 flex items-center justify-between rounded-2xl bg-black/[0.03] px-4 py-3">
+                <div>
+                  <p className="text-xs font-semibold text-[#64748b] uppercase tracking-wider">Room passcode</p>
+                  {revealedPasscode?.roomCode === selectedRoom.room_code ? (
+                    <p className="mt-1 font-mono text-sm font-semibold text-[#0f9d58]">
+                      {revealedPasscode.passcode} <span className="font-sans text-xs text-[#94a3b8]">(copy it now — shown once)</span>
+                    </p>
+                  ) : (
+                    <p className="mt-1 text-sm text-[#94a3b8]">
+                      {selectedRoom.requires_passcode ? "Already set — regenerate to see a new one" : "Not set yet"}
+                    </p>
+                  )}
+                </div>
+                <button
+                  onClick={handleRegeneratePasscode}
+                  className="rounded-xl px-4 py-2 text-xs font-semibold text-[#4285f4] hover:bg-black/5 transition-all duration-200"
+                >
+                  {selectedRoom.requires_passcode ? "Regenerate" : "Generate passcode"}
+                </button>
+              </div>
             </section>
 
             <section className="glass-card rounded-3xl p-6">

@@ -63,6 +63,8 @@ export interface Meeting {
   created_at: string;
   chime_meeting?: Record<string, unknown> | null;
   chime_attendee?: Record<string, unknown> | null;
+  requires_passcode?: boolean;
+  passcode?: string | null;
 }
 
 export interface UserSettings {
@@ -111,8 +113,8 @@ export async function updateMeetingTitle(roomCode: string, title: string): Promi
   return data;
 }
 
-export async function joinMeeting(roomCode: string): Promise<Meeting> {
-  const { data } = await api.post<Meeting>(`/meetings/${roomCode}/join`);
+export async function joinMeeting(roomCode: string, passcode?: string): Promise<Meeting> {
+  const { data } = await api.post<Meeting>(`/meetings/${roomCode}/join`, passcode ? { passcode } : {});
   return data;
 }
 
@@ -220,8 +222,14 @@ export interface JoinPatientLinkResult {
   chime_attendee?: Record<string, unknown> | null;
 }
 
-export async function getMeetingAccessInfo(roomCode: string): Promise<{ is_doctor_room: boolean; is_host: boolean }> {
-  const { data } = await api.get<{ is_doctor_room: boolean; is_host: boolean }>(`/meetings/${roomCode}/access-info`);
+export interface MeetingAccessInfo {
+  is_doctor_room: boolean;
+  is_host: boolean;
+  requires_passcode: boolean;
+}
+
+export async function getMeetingAccessInfo(roomCode: string): Promise<MeetingAccessInfo> {
+  const { data } = await api.get<MeetingAccessInfo>(`/meetings/${roomCode}/access-info`);
   return data;
 }
 
@@ -241,6 +249,11 @@ export async function createDoctorRoom(title: string): Promise<Meeting> {
 
 export async function listDoctorRooms(): Promise<Meeting[]> {
   const { data } = await api.get<Meeting[]>("/admin/rooms");
+  return data;
+}
+
+export async function regenerateRoomPasscode(roomCode: string): Promise<Meeting> {
+  const { data } = await api.post<Meeting>(`/admin/rooms/${roomCode}/passcode/regenerate`);
   return data;
 }
 
@@ -284,12 +297,16 @@ export async function downloadSessionRecording(sessionId: string, filename: stri
   window.open(data.url, "_blank");
 }
 
-export async function getPatientLinkInfo(
-  code: string
-): Promise<{ room_code: string; title: string; patient_name: string; expired: boolean }> {
-  const { data } = await api.get<{ room_code: string; title: string; patient_name: string; expired: boolean }>(
-    `/patient-links/${code}`
-  );
+export interface PatientLinkInfo {
+  room_code: string | null;
+  title: string | null;
+  patient_name: string;
+  expired: boolean;
+  room_assigned: boolean;
+}
+
+export async function getPatientLinkInfo(code: string): Promise<PatientLinkInfo> {
+  const { data } = await api.get<PatientLinkInfo>(`/patient-links/${code}`);
   return data;
 }
 
@@ -302,5 +319,36 @@ export async function getPatientSession(sessionId: string): Promise<JoinPatientL
   const { data } = await api.get<JoinPatientLinkResult>(`/patient-links/sessions/${sessionId}`, {
     params: { _: Date.now() },
   });
+  return data;
+}
+
+export interface ThirdPartyApp {
+  id: string;
+  app_name: string;
+  company_name: string;
+  api_key_prefix: string;
+  status: string;
+  created_at: string;
+}
+
+export interface ThirdPartyAppCreated extends ThirdPartyApp {
+  api_key: string;
+}
+
+export async function listThirdPartyApps(): Promise<ThirdPartyApp[]> {
+  const { data } = await api.get<ThirdPartyApp[]>("/admin/third-party-apps");
+  return data;
+}
+
+export async function createThirdPartyApp(appName: string, companyName: string): Promise<ThirdPartyAppCreated> {
+  const { data } = await api.post<ThirdPartyAppCreated>("/admin/third-party-apps", {
+    app_name: appName,
+    company_name: companyName,
+  });
+  return data;
+}
+
+export async function regenerateThirdPartyAppKey(appId: string): Promise<ThirdPartyAppCreated> {
+  const { data } = await api.post<ThirdPartyAppCreated>(`/admin/third-party-apps/${appId}/regenerate-key`);
   return data;
 }

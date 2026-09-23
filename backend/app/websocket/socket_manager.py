@@ -5,7 +5,16 @@ import socketio
 from app.admin.auth import is_valid_admin_token
 from app.config import settings
 from app.database import SessionLocal
-from app.models import ConsultationSession, ConsultationStatus, Meeting, PatientLink, TranscriptEntry, User, UserSettings
+from app.models import (
+    ConsultationSession,
+    ConsultationStatus,
+    Meeting,
+    MeetingDoctor,
+    PatientLink,
+    TranscriptEntry,
+    User,
+    UserSettings,
+)
 from app.speech.transcribe_stream import TranscribeSession
 from app.translation.translator import translate
 
@@ -55,11 +64,24 @@ def _authorize_room_join(room_code: str, user_id: str, access_token: str | None,
         if meeting is None:
             return False
         is_doctor_room = db.query(PatientLink).filter(PatientLink.room_id == meeting.id).first() is not None
-        if not is_doctor_room:
+        is_restricted = is_doctor_room or meeting.room_passcode_hash is not None
+        if not is_restricted:
             return True
         if meeting.host_id == user_id:
             return True
         if is_valid_admin_token(admin_token, db):
+            return True
+        # a plain admin-created private room has no explicit doctor roster —
+        # the passcode (already verified by the REST /join call that got this
+        # browser its Chime attendee) is the only credential a provider needs.
+        if meeting.room_passcode_hash is not None and meeting.third_party_app_id is None:
+            return True
+        if (
+            db.query(MeetingDoctor)
+            .filter(MeetingDoctor.meeting_id == meeting.id, MeetingDoctor.doctor_user_id == user_id)
+            .first()
+            is not None
+        ):
             return True
         if access_token:
             active_session = (

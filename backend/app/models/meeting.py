@@ -29,7 +29,7 @@ class Meeting(Base):
         String(32), unique=True, index=True, nullable=False, default=generate_room_code
     )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
-    host_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
+    host_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
     status: Mapped[MeetingStatus] = mapped_column(
         SAEnum(MeetingStatus), default=MeetingStatus.SCHEDULED, nullable=False
     )
@@ -39,6 +39,10 @@ class Meeting(Base):
     media_pipeline_arn: Mapped[str | None] = mapped_column(String(255), nullable=True)
     recording_s3_prefix: Mapped[str | None] = mapped_column(String(255), nullable=True)
     recording_status: Mapped[str] = mapped_column(String(16), default="none", nullable=False)
+    third_party_app_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("third_party_apps.id"), nullable=True, index=True
+    )
+    room_passcode_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -49,3 +53,7 @@ class Meeting(Base):
     participants: Mapped[list["MeetingParticipant"]] = relationship(
         back_populates="meeting", cascade="all, delete-orphan"
     )
+
+    @property
+    def requires_passcode(self) -> bool:
+        return self.room_passcode_hash is not None

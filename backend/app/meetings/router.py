@@ -7,9 +7,20 @@ from sqlalchemy.orm import Session
 from app.aws import chime
 from app.config import settings
 from app.database import get_db
-from app.models import ConsultationSession, ConsultationStatus, Meeting, MeetingParticipant, MeetingStatus, PatientLink, TranscriptEntry, User
-from app.schemas.meeting import CreateMeetingRequest, MeetingResponse, UpdateMeetingRequest
+from app.models import (
+    ConsultationSession,
+    ConsultationStatus,
+    Meeting,
+    MeetingDoctor,
+    MeetingParticipant,
+    MeetingStatus,
+    PatientLink,
+    TranscriptEntry,
+    User,
+)
+from app.schemas.meeting import CreateMeetingRequest, JoinMeetingRequest, MeetingResponse, UpdateMeetingRequest
 from app.schemas.transcript import MeetingSummaryResponse, TranscriptEntryResponse
+from app.security import verify_secret
 from app.storage.s3_storage import get_presigned_url, list_final_recordings
 from app.users.dependencies import get_current_user
 
@@ -111,7 +122,11 @@ def get_access_info(
 ) -> dict[str, bool]:
     meeting = _get_meeting_or_404(room_code, db)
     is_doctor_room = db.query(PatientLink).filter(PatientLink.room_id == meeting.id).first() is not None
-    return {"is_doctor_room": is_doctor_room, "is_host": current_user.id == meeting.host_id}
+    return {
+        "is_doctor_room": is_doctor_room,
+        "is_host": current_user.id == meeting.host_id,
+        "requires_passcode": meeting.room_passcode_hash is not None,
+    }
 
 
 @router.patch("/{room_code}", response_model=MeetingResponse)
@@ -130,20 +145,46 @@ def update_meeting(
     return meeting
 
 
-def _require_host_or_admin(meeting: Meeting, current_user: User) -> None:
-    if meeting.host_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the host can do this")
+def _require_host_or_admin(meeting: Meeting, current_user: User, db: Session) -> None:
+    if meeting.host_id == current_user.id:
+        return
+    is_assigned_doctor = (
+        db.query(MeetingDoctor)
+        .filter(MeetingDoctor.meeting_id == meeting.id, MeetingDoctor.doctor_user_id == current_user.id)
+        .first()
+        is not None
+    )
+    if not is_assigned_doctor:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the host or an assigned doctor can do this")
 
 
 @router.post("/{room_code}/join", response_model=MeetingResponse)
 def join_meeting(
     room_code: str,
+    payload: JoinMeetingRequest = JoinMeetingRequest(),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Meeting:
     meeting = _get_meeting_or_404(room_code, db)
     if meeting.status == MeetingStatus.ENDED:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Meeting has ended")
+
+    if meeting.room_passcode_hash is not None:
+        if not payload.passcode or not verify_secret(payload.passcode, meeting.room_passcode_hash):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid room passcode")
+        # third-party rooms have an explicit doctor roster to enforce; a plain
+        # admin-created private room has no such roster — the passcode itself
+        # is the only credential a provider is given, so it's sufficient alone.
+        if meeting.third_party_app_id is not None:
+            is_assigned_doctor = (
+                meeting.host_id == current_user.id
+                or db.query(MeetingDoctor)
+                .filter(MeetingDoctor.meeting_id == meeting.id, MeetingDoctor.doctor_user_id == current_user.id)
+                .first()
+                is not None
+            )
+            if not is_assigned_doctor:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not assigned to this room")
 
     if meeting.status == MeetingStatus.SCHEDULED:
         meeting.status = MeetingStatus.ACTIVE
@@ -268,7 +309,7 @@ def start_recording(
     db: Session = Depends(get_db),
 ) -> dict[str, str]:
     meeting = _get_meeting_or_404(room_code, db)
-    _require_host_or_admin(meeting, current_user)
+    _require_host_or_admin(meeting, current_user, db)
     if meeting.chime_meeting_id is None or meeting.chime_meeting_arn is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Meeting has not started")
 
@@ -303,7 +344,7 @@ def stop_recording(
     db: Session = Depends(get_db),
 ) -> dict[str, str]:
     meeting = _get_meeting_or_404(room_code, db)
-    _require_host_or_admin(meeting, current_user)
+    _require_host_or_admin(meeting, current_user, db)
 
     if meeting.media_pipeline_id is not None:
         try:

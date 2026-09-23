@@ -66,15 +66,17 @@ class PatientLinkWithSessionResponse(BaseModel):
 
 
 class RoomPublicResponse(BaseModel):
-    room_code: str
-    title: str
+    room_code: str | None = None
+    title: str | None = None
     patient_name: str
     expired: bool = False
+    room_assigned: bool = True
 
 
 class JoinPatientLinkResponse(BaseModel):
-    session: ConsultationSessionResponse
+    session: ConsultationSessionResponse | None = None
     room_code: str | None = None
     access_token: str | None = None
     chime_meeting: dict | None = None
     chime_attendee: dict | None = None
+    room_assigned: bool = True

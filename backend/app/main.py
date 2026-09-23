@@ -12,13 +12,17 @@ from app.meetings.router import router as meetings_router
 from app.models import (  # noqa: F401 (registers models on Base)
     ConsultationSession,
     Meeting,
+    MeetingDoctor,
     MeetingParticipant,
+    Patient,
     PatientLink,
+    ThirdPartyApp,
     TranscriptEntry,
     User,
     UserSettings,
 )
 from app.patients.router import router as patients_router
+from app.third_party.router import router as third_party_router
 from app.translation.translator import warmup as warmup_translator
 from app.users.router import router as users_router
 
@@ -41,6 +45,13 @@ def _migrate_schema() -> None:
         "ALTER TABLE meetings ADD COLUMN media_pipeline_arn VARCHAR(255)",
         "ALTER TABLE meetings ADD COLUMN recording_s3_prefix VARCHAR(255)",
         "ALTER TABLE meetings ADD COLUMN recording_status VARCHAR(16) DEFAULT 'none' NOT NULL",
+        "ALTER TABLE meetings ADD COLUMN third_party_app_id VARCHAR(36)",
+        "ALTER TABLE meetings ADD COLUMN room_passcode_hash VARCHAR(255)",
+        "ALTER TABLE meetings MODIFY COLUMN host_id VARCHAR(36) NULL",
+        "ALTER TABLE patient_links ADD COLUMN patient_id VARCHAR(36)",
+        "ALTER TABLE patient_links ADD COLUMN status VARCHAR(16) DEFAULT 'active' NOT NULL",
+        "ALTER TABLE patient_links ADD COLUMN invalidated_at DATETIME",
+        "ALTER TABLE patient_links MODIFY COLUMN room_id VARCHAR(36) NULL",
     ):
         with engine.begin() as conn:
             try:
@@ -74,6 +85,7 @@ app.include_router(meetings_router)
 app.include_router(users_router)
 app.include_router(admin_router)
 app.include_router(patients_router)
+app.include_router(third_party_router)
 
 
 @app.get("/health")

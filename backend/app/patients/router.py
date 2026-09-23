@@ -70,10 +70,15 @@ def _chime_join_info(session: ConsultationSession, current_user: User, db: Sessi
 @router.get("/{code}", response_model=RoomPublicResponse)
 def get_patient_link(code: str, db: Session = Depends(get_db)) -> RoomPublicResponse:
     link = _get_link_or_404(code, db)
+    patient_name = link.label or "Patient"
+    if link.status != "active":
+        return RoomPublicResponse(patient_name=patient_name, expired=True, room_assigned=link.room_id is not None)
+    if link.room_id is None:
+        return RoomPublicResponse(patient_name=patient_name, expired=False, room_assigned=False)
     session = db.query(ConsultationSession).filter(ConsultationSession.patient_link_id == link.id).first()
     expired = session is not None and session.status == ConsultationStatus.COMPLETED
     return RoomPublicResponse(
-        room_code=link.room.room_code, title=link.room.title, patient_name=link.label or "Patient", expired=expired
+        room_code=link.room.room_code, title=link.room.title, patient_name=patient_name, expired=expired
     )
 
 
@@ -84,6 +89,11 @@ def join_patient_link(
     db: Session = Depends(get_db),
 ) -> JoinPatientLinkResponse:
     link = _get_link_or_404(code, db)
+    if link.status != "active":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This link is no longer active")
+    if link.room_id is None:
+        return JoinPatientLinkResponse(room_assigned=False)
+
     patient_name = link.label or current_user.full_name
     session = db.query(ConsultationSession).filter(ConsultationSession.patient_link_id == link.id).first()
     if session is None:

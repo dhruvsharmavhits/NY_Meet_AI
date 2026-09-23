@@ -81,6 +81,11 @@ export default function MeetingRoomPage() {
   const [gateError, setGateError] = useState<string | null>(null);
   const [gateSubmitting, setGateSubmitting] = useState(false);
 
+  const [roomPasscodeInput, setRoomPasscodeInput] = useState("");
+  const [verifiedPasscode, setVerifiedPasscode] = useState<string | null>(null);
+  const [passcodeError, setPasscodeError] = useState<string | null>(null);
+  const [passcodeSubmitting, setPasscodeSubmitting] = useState(false);
+
   const { data: accessInfo } = useQuery({
     queryKey: ["access-info", roomCode],
     queryFn: () => getMeetingAccessInfo(roomCode as string),
@@ -88,7 +93,8 @@ export default function MeetingRoomPage() {
   });
 
   const authorized = isHost || isAdmin || !!accessTokenParam;
-  const needsAdminGate = !!accessInfo?.is_doctor_room && !authorized;
+  const needsAdminGate = !!accessInfo?.is_doctor_room && !accessInfo?.requires_passcode && !authorized;
+  const needsPasscodeGate = !!accessInfo?.requires_passcode && !verifiedPasscode && !accessTokenParam;
 
   async function handleGateSubmit(e: FormEvent) {
     e.preventDefault();
@@ -102,6 +108,24 @@ export default function MeetingRoomPage() {
       setGateError("Invalid password");
     } finally {
       setGateSubmitting(false);
+    }
+  }
+
+  async function handlePasscodeSubmit(e: FormEvent) {
+    e.preventDefault();
+    setPasscodeError(null);
+    setPasscodeSubmitting(true);
+    try {
+      await joinMeeting(roomCode as string, roomPasscodeInput);
+      setVerifiedPasscode(roomPasscodeInput);
+    } catch (err: any) {
+      setPasscodeError(
+        err?.response?.status === 403
+          ? "You are not assigned to this room."
+          : "Invalid room passcode."
+      );
+    } finally {
+      setPasscodeSubmitting(false);
     }
   }
 
@@ -205,7 +229,7 @@ export default function MeetingRoomPage() {
     }
     if (roomCode) {
       try {
-        const joined = await joinMeeting(roomCode);
+        const joined = await joinMeeting(roomCode, verifiedPasscode || undefined);
         setChimeJoin({ chime_meeting: joined.chime_meeting ?? null, chime_attendee: joined.chime_attendee ?? null });
       } catch {
         setRecordingError("Could not connect to the meeting. Please try again.");
@@ -356,6 +380,53 @@ export default function MeetingRoomPage() {
           <p className="max-w-sm text-sm text-[#64748b]">
             You're not authorized to join this meeting. Use the personal link your doctor sent you, or sign in as the host.
           </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (needsPasscodeGate) {
+    return (
+      <div className="page-gradient relative flex min-h-screen flex-col items-center justify-center overflow-hidden px-4">
+        <div className="bg-blob bg-blob-1" />
+        <div className="bg-blob bg-blob-2" />
+        <div className="relative z-10 w-full max-w-[420px] animate-meet-fade-in">
+          <div className="glass-card rounded-3xl px-10 py-12 glow-blue">
+            <div className="mb-8 flex flex-col items-center gap-4">
+              <LinguaMeetLogo size={48} />
+              <div className="text-center">
+                <h1 className="text-2xl font-bold text-[#1a1a2e]">Private room</h1>
+                <p className="mt-1 text-sm text-[#64748b]">Enter the room passcode to continue.</p>
+              </div>
+            </div>
+
+            {passcodeError && (
+              <div className="mb-5 flex items-center gap-2 rounded-2xl bg-[#ea4335]/8 px-4 py-3 text-sm text-[#ea4335]">
+                {passcodeError}
+              </div>
+            )}
+
+            <form onSubmit={handlePasscodeSubmit} className="space-y-5">
+              <input
+                id="room-passcode-input"
+                type="text"
+                required
+                autoFocus
+                value={roomPasscodeInput}
+                onChange={(e) => setRoomPasscodeInput(e.target.value)}
+                placeholder="Room passcode"
+                className="input-modern w-full"
+              />
+              <button
+                id="room-passcode-submit"
+                type="submit"
+                disabled={passcodeSubmitting || !roomPasscodeInput}
+                className="btn-gradient w-full rounded-2xl py-4 text-base"
+              >
+                {passcodeSubmitting ? "Verifying..." : "Continue"}
+              </button>
+            </form>
+          </div>
         </div>
       </div>
     );

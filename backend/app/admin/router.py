@@ -12,6 +12,7 @@ from app.models import (
     Meeting,
     MeetingStatus,
     PatientLink,
+    ThirdPartyApp,
     TranscriptEntry,
     User,
 )
@@ -27,8 +28,10 @@ from app.schemas.patient import (
     PatientLinkResponse,
     PatientLinkWithSessionResponse,
 )
+from app.schemas.third_party import CreateThirdPartyAppRequest, ThirdPartyAppCreatedResponse, ThirdPartyAppResponse
 from app.schemas.transcript import TranscriptEntryResponse
 from app.storage.s3_storage import get_presigned_url, list_final_recordings
+from app.third_party.auth import generate_api_key, generate_passcode
 from app.users.dependencies import get_current_user
 from app.websocket.socket_manager import kick_patient
 
@@ -95,15 +98,33 @@ def create_room(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Meeting:
+    passcode, passcode_hash = generate_passcode()
     room = Meeting(
         title=payload.title,
         host_id=current_user.id,
         status=MeetingStatus.ACTIVE,
         started_at=datetime.now(timezone.utc),
+        room_passcode_hash=passcode_hash,
     )
     db.add(room)
     db.commit()
     db.refresh(room)
+    room.passcode = passcode
+    return room
+
+
+@router.post(
+    "/rooms/{room_code}/passcode/regenerate",
+    response_model=MeetingResponse,
+    dependencies=[Depends(require_admin)],
+)
+def regenerate_room_passcode(room_code: str, db: Session = Depends(get_db)) -> Meeting:
+    room = _get_room_or_404(room_code, db)
+    passcode, passcode_hash = generate_passcode()
+    room.room_passcode_hash = passcode_hash
+    db.commit()
+    db.refresh(room)
+    room.passcode = passcode
     return room
 
 
@@ -257,3 +278,49 @@ def download_session_recording(session_id: str, filename: str, db: Session = Dep
     if url is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found")
     return {"url": url}
+
+
+@router.post(
+    "/third-party-apps",
+    response_model=ThirdPartyAppCreatedResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_admin)],
+)
+def create_third_party_app(payload: CreateThirdPartyAppRequest, db: Session = Depends(get_db)) -> ThirdPartyAppCreatedResponse:
+    api_key, prefix, api_key_hash = generate_api_key()
+    app = ThirdPartyApp(
+        app_name=payload.app_name,
+        company_name=payload.company_name,
+        api_key_hash=api_key_hash,
+        api_key_prefix=prefix,
+    )
+    db.add(app)
+    db.commit()
+    db.refresh(app)
+    return ThirdPartyAppCreatedResponse(**ThirdPartyAppResponse.model_validate(app).model_dump(), api_key=api_key)
+
+
+@router.get(
+    "/third-party-apps",
+    response_model=list[ThirdPartyAppResponse],
+    dependencies=[Depends(require_admin)],
+)
+def list_third_party_apps(db: Session = Depends(get_db)) -> list[ThirdPartyApp]:
+    return db.query(ThirdPartyApp).order_by(ThirdPartyApp.created_at.desc()).all()
+
+
+@router.post(
+    "/third-party-apps/{app_id}/regenerate-key",
+    response_model=ThirdPartyAppCreatedResponse,
+    dependencies=[Depends(require_admin)],
+)
+def regenerate_third_party_app_key(app_id: str, db: Session = Depends(get_db)) -> ThirdPartyAppCreatedResponse:
+    app = db.get(ThirdPartyApp, app_id)
+    if app is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Third-party app not found")
+    api_key, prefix, api_key_hash = generate_api_key()
+    app.api_key_hash = api_key_hash
+    app.api_key_prefix = prefix
+    db.commit()
+    db.refresh(app)
+    return ThirdPartyAppCreatedResponse(**ThirdPartyAppResponse.model_validate(app).model_dump(), api_key=api_key)
