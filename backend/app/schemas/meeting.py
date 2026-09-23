@@ -20,10 +20,12 @@ class MeetingResponse(BaseModel):
     title: str
     host_id: str
     status: MeetingStatus
-    is_recording: bool
+    recording_status: str
     scheduled_at: datetime | None
     started_at: datetime | None
     ended_at: datetime | None
     created_at: datetime
+    chime_meeting: dict | None = None
+    chime_attendee: dict | None = None
 
     model_config = {"from_attributes": True}

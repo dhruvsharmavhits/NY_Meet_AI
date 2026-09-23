@@ -6,8 +6,7 @@ from app.admin.auth import is_valid_admin_token
 from app.config import settings
 from app.database import SessionLocal
 from app.models import ConsultationSession, ConsultationStatus, Meeting, PatientLink, TranscriptEntry, User, UserSettings
-from app.speech.streaming_session import SpeechEvent, StreamingSession
-from app.speech.transcriber import transcribe_final, transcribe_partial
+from app.speech.transcribe_stream import TranscribeSession
 from app.translation.translator import translate
 
 sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
@@ -20,14 +19,16 @@ def _ts() -> str:
 # room_code -> {sid: {"user_id": str, "full_name": str}}
 rooms: dict[str, dict[str, dict]] = {}
 
-# sid -> continuous VAD-driven streaming session (lives for the whole
-# call, not per-utterance — this is what makes listening "continuous").
-streaming_sessions: dict[str, StreamingSession] = {}
+# room_code -> sid of the participant currently screen-sharing, or None
+screen_sharers: dict[str, str | None] = {}
+
+# sid -> continuous Amazon Transcribe Streaming session (lives for the
+# whole call, not per-utterance).
+transcribe_sessions: dict[str, TranscribeSession] = {}
+# sid -> lock guarding lazy creation of that sid's TranscribeSession.
+transcribe_session_locks: dict[str, asyncio.Lock] = {}
 # sid -> last partial text emitted, so we don't spam identical partials.
 last_partial_text: dict[str, str] = {}
-# sid -> lock, so overlapping speech events for the same speaker never
-# transcribe concurrently.
-transcription_locks: dict[str, asyncio.Lock] = {}
 
 
 def _get_user_by_id(user_id: str | None) -> User | None:
@@ -58,7 +59,7 @@ def _authorize_room_join(room_code: str, user_id: str, access_token: str | None,
             return True
         if meeting.host_id == user_id:
             return True
-        if is_valid_admin_token(admin_token):
+        if is_valid_admin_token(admin_token, db):
             return True
         if access_token:
             active_session = (
@@ -94,14 +95,21 @@ async def connect(sid, environ, auth):
 @sio.event
 async def disconnect(sid):
     print(f"[rtc] disconnect sid={sid}", flush=True)
-    streaming_sessions.pop(sid, None)
+    session = transcribe_sessions.pop(sid, None)
+    if session is not None:
+        await session.close()
+    transcribe_session_locks.pop(sid, None)
     last_partial_text.pop(sid, None)
     for room_code, participants in list(rooms.items()):
         if sid in participants:
             del participants[sid]
+            if screen_sharers.get(room_code) == sid:
+                screen_sharers[room_code] = None
+                await sio.emit("screen-share-state", {"sid": sid, "sharing": False}, room=room_code)
             await sio.emit("peer-left", {"sid": sid}, room=room_code)
             if not participants:
                 rooms.pop(room_code, None)
+                screen_sharers.pop(room_code, None)
 
 
 @sio.on("join-room")
@@ -119,112 +127,63 @@ async def join_room(sid, data):
 
     participants = rooms.setdefault(room_code, {})
 
-    mic_on = data.get("mic_on", True)
-    camera_on = data.get("camera_on", True)
-
     existing = [
-        {
-            "sid": psid,
-            "user_id": p["user_id"],
-            "full_name": p["full_name"],
-            "mic_on": p.get("mic_on", True),
-            "camera_on": p.get("camera_on", True),
-            "screen_sharing": p.get("screen_sharing", False),
-        }
+        {"sid": psid, "user_id": p["user_id"], "full_name": p["full_name"]}
         for psid, p in participants.items()
     ]
 
-    participants[sid] = {
-        "user_id": session["user_id"],
-        "full_name": session["full_name"],
-        "mic_on": mic_on,
-        "camera_on": camera_on,
-        "screen_sharing": False,
-    }
+    participants[sid] = {"user_id": session["user_id"], "full_name": session["full_name"]}
     await sio.enter_room(sid, room_code)
-    print(f"[rtc] join-room sid={sid} room={room_code} mic_on={mic_on} camera_on={camera_on} existing_peers={[p['sid'] for p in existing]}", flush=True)
+    print(f"[rtc] join-room sid={sid} room={room_code} existing_peers={[p['sid'] for p in existing]}", flush=True)
 
     await sio.emit("existing-peers", {"peers": existing}, room=sid)
     await sio.emit(
         "peer-joined",
-        {
-            "sid": sid,
-            "user_id": session["user_id"],
-            "full_name": session["full_name"],
-            "mic_on": mic_on,
-            "camera_on": camera_on,
-            "screen_sharing": False,
-        },
+        {"sid": sid, "user_id": session["user_id"], "full_name": session["full_name"]},
         room=room_code,
         skip_sid=sid,
     )
 
 
-@sio.on("media-state")
-async def media_state(sid, data):
-    room_code = data["room_code"]
-    participants = rooms.get(room_code, {})
-    print(f"[media-debug] received from sid={sid} room={room_code} data={data} in_room={sid in participants} roster={list(participants.keys())}", flush=True)
-    if sid not in participants:
-        return
-    participants[sid]["mic_on"] = data.get("mic_on", True)
-    participants[sid]["camera_on"] = data.get("camera_on", True)
-    print(f"[media-debug] broadcasting sid={sid} to room={room_code} skip_sid={sid} recipients={[s for s in participants if s != sid]}", flush=True)
-    await sio.emit(
-        "media-state",
-        {"sid": sid, "mic_on": participants[sid]["mic_on"], "camera_on": participants[sid]["camera_on"]},
-        room=room_code,
-        skip_sid=sid,
-    )
-
-
-@sio.on("screen-share-state")
-async def screen_share_state(sid, data):
+@sio.on("screen-share-claim")
+async def screen_share_claim(sid, data):
     room_code = data["room_code"]
     participants = rooms.get(room_code, {})
     if sid not in participants:
         return
-    sharing = data.get("sharing", False)
 
-    if sharing:
-        # only one screen share at a time — anyone else currently sharing
-        # gets force-stopped (only their own client can actually stop their
-        # capture, so we tell them to instead of trying to do it ourselves)
-        for other_sid, other in participants.items():
-            if other_sid != sid and other.get("screen_sharing"):
-                other["screen_sharing"] = False
-                await sio.emit("force-stop-screen-share", {}, room=other_sid)
-                await sio.emit("screen-share-state", {"sid": other_sid, "sharing": False}, room=room_code)
+    current_sharer = screen_sharers.get(room_code)
+    if current_sharer is not None and current_sharer != sid:
+        await sio.emit("force-stop-screen-share", {}, room=current_sharer)
 
-    participants[sid]["screen_sharing"] = sharing
-    await sio.emit(
-        "screen-share-state",
-        {"sid": sid, "sharing": participants[sid]["screen_sharing"]},
-        room=room_code,
-        skip_sid=sid,
-    )
+    screen_sharers[room_code] = sid
+    await sio.emit("screen-share-state", {"sid": sid, "sharing": True}, room=room_code, skip_sid=sid)
+
+
+@sio.on("screen-share-stop")
+async def screen_share_stop(sid, data):
+    room_code = data["room_code"]
+    if screen_sharers.get(room_code) == sid:
+        screen_sharers[room_code] = None
+        await sio.emit("screen-share-state", {"sid": sid, "sharing": False}, room=room_code, skip_sid=sid)
 
 
 @sio.on("leave-room")
 async def leave_room(sid, data):
     room_code = data["room_code"]
     participants = rooms.get(room_code, {})
-    streaming_sessions.pop(sid, None)
+    session = transcribe_sessions.pop(sid, None)
+    if session is not None:
+        await session.close()
+    transcribe_session_locks.pop(sid, None)
     last_partial_text.pop(sid, None)
     if sid in participants:
         del participants[sid]
+        if screen_sharers.get(room_code) == sid:
+            screen_sharers[room_code] = None
+            await sio.emit("screen-share-state", {"sid": sid, "sharing": False}, room=room_code)
         await sio.leave_room(sid, room_code)
         await sio.emit("peer-left", {"sid": sid}, room=room_code)
-
-
-@sio.on("signal")
-async def signal(sid, data):
-    print(f"[rtc] signal from={sid} to={data.get('to')} type={data.get('type')}", flush=True)
-    await sio.emit(
-        "signal",
-        {"from": sid, "type": data["type"], "payload": data["payload"]},
-        room=data["to"],
-    )
 
 
 @sio.on("chat-message")
@@ -284,55 +243,38 @@ def _save_transcript_entry(room_code: str, user_id: str, speaker_name: str, text
         db.close()
 
 
-async def _handle_speech_event(sid: str, room_code: str, user_id: str, full_name: str, event: SpeechEvent) -> None:
-    if event.kind == "partial":
+async def _handle_transcript_result(
+    sid: str, room_code: str, user_id: str, full_name: str, language: str, text: str, is_partial: bool
+) -> None:
+    if is_partial:
         if not settings.enable_partial_transcripts:
             return
-        try:
-            text, _ = await asyncio.to_thread(transcribe_partial, event.audio)
-        except Exception:
-            return
-        if not text or text == last_partial_text.get(sid):
+        if text == last_partial_text.get(sid):
             return
         last_partial_text[sid] = text
         await sio.emit("partial-transcript", {"sid": sid, "text": text}, room=room_code)
         return
 
     pipeline_start = time.perf_counter()
+    last_partial_text.pop(sid, None)
+
+    print(f"[STT] Text: {text!r} ({_ts()})")
+
+    asyncio.create_task(asyncio.to_thread(_save_transcript_entry, room_code, user_id, full_name, text, language))
 
     participants = rooms.get(room_code, {})
     user_ids = [p["user_id"] for p in participants.values()]
-    caption_langs_task = asyncio.create_task(asyncio.to_thread(_get_caption_languages, user_ids))
-
-    lock = transcription_locks.setdefault(sid, asyncio.Lock())
-    async with lock:
-        last_partial_text.pop(sid, None)
-        stt_start = time.perf_counter()
-        try:
-            text, detected_lang = await asyncio.to_thread(transcribe_final, event.audio)
-        except Exception:
-            text = ""
-        stt_ms = (time.perf_counter() - stt_start) * 1000
-        if not text:
-            caption_langs_task.cancel()
-            return
-
-    print(f"[STT] Text: {text!r} ({_ts()})")
-    print(f"[STT] Time: {stt_ms:.0f}ms")
-
-    asyncio.create_task(asyncio.to_thread(_save_transcript_entry, room_code, user_id, full_name, text, detected_lang))
-
-    caption_langs = await caption_langs_task
+    caption_langs = await asyncio.to_thread(_get_caption_languages, user_ids)
     targets = dict.fromkeys(caption_langs.get(p["user_id"], "en") for p in participants.values())
-    targets.pop(detected_lang, None)
+    targets.pop(language, None)
 
     translate_start = time.perf_counter()
-    results = await asyncio.gather(*(asyncio.to_thread(translate, text, detected_lang, t) for t in targets))
+    results = await asyncio.gather(*(asyncio.to_thread(translate, text, language, t) for t in targets))
     translate_ms = (time.perf_counter() - translate_start) * 1000
     translations = {t: r for t, r in zip(targets, results) if r is not None}
 
     for t, r in translations.items():
-        print(f"[Translation] {detected_lang}->{t}: {r!r} ({_ts()})")
+        print(f"[Translation] {language}->{t}: {r!r} ({_ts()})")
     print(f"[Translation] Time: {translate_ms:.0f}ms")
     print(f"[Pipeline] Total: {(time.perf_counter() - pipeline_start) * 1000:.0f}ms\n")
 
@@ -342,7 +284,7 @@ async def _handle_speech_event(sid: str, room_code: str, user_id: str, full_name
             "sid": sid,
             "full_name": full_name,
             "text": text,
-            "lang": detected_lang,
+            "lang": language,
             "translations": translations,
             "ts": int(time.time() * 1000),
         },
@@ -362,6 +304,24 @@ async def kick_patient(room_code: str, patient_user_id: str) -> None:
         await sio.disconnect(target_sid)
 
 
+async def _get_or_create_transcribe_session(sid: str, room_code: str, user_id: str, full_name: str) -> TranscribeSession:
+    lock = transcribe_session_locks.setdefault(sid, asyncio.Lock())
+    async with lock:
+        session = transcribe_sessions.get(sid)
+        if session is not None:
+            return session
+
+        async def on_result(text: str, is_partial: bool, language: str) -> None:
+            asyncio.create_task(
+                _handle_transcript_result(sid, room_code, user_id, full_name, language, text, is_partial)
+            )
+
+        session = TranscribeSession(on_result, sid)
+        await session.start()
+        transcribe_sessions[sid] = session
+        return session
+
+
 @sio.on("audio-chunk")
 async def audio_chunk(sid, data):
     room_code = data["room_code"]
@@ -369,16 +329,13 @@ async def audio_chunk(sid, data):
     if not isinstance(chunk, (bytes, bytearray)):
         return
 
-    session = streaming_sessions.setdefault(sid, StreamingSession())
-    try:
-        events = session.push(bytes(chunk))
-    except Exception:
-        return
-    if not events:
-        return
+    session = transcribe_sessions.get(sid)
+    if session is None:
+        ctx = await sio.get_session(sid)
+        try:
+            session = await _get_or_create_transcribe_session(sid, room_code, ctx["user_id"], ctx["full_name"])
+        except Exception as exc:
+            print(f"[Transcribe] failed to start session sid={sid}: {exc!r}", flush=True)
+            return
 
-    ctx = await sio.get_session(sid)
-    for event in events:
-        asyncio.create_task(
-            _handle_speech_event(sid, room_code, ctx["user_id"], ctx["full_name"], event)
-        )
+    await session.push(bytes(chunk))

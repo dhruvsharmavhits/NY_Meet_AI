@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from enum import Enum
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String
+from sqlalchemy import DateTime, ForeignKey, String
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy import func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -33,7 +33,12 @@ class Meeting(Base):
     status: Mapped[MeetingStatus] = mapped_column(
         SAEnum(MeetingStatus), default=MeetingStatus.SCHEDULED, nullable=False
     )
-    is_recording: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    chime_meeting_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    chime_meeting_arn: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    media_pipeline_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    media_pipeline_arn: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    recording_s3_prefix: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    recording_status: Mapped[str] = mapped_column(String(16), default="none", nullable=False)
 
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

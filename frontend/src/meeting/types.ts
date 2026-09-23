@@ -5,6 +5,8 @@ export interface Participant {
   micOn?: boolean;
   cameraOn?: boolean;
   screenSharing?: boolean;
+  tileId?: number | null;
+  screenTileId?: number | null;
 }
 
 export interface ChatMessage {
@@ -21,12 +23,4 @@ export interface Caption {
   lang: string;
   translations: Record<string, string>;
   ts: number;
-}
-
-export type SignalType = "offer" | "answer" | "ice-candidate";
-
-export interface SignalPayload {
-  from: string;
-  type: SignalType;
-  payload: unknown;
 }

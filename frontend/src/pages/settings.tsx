@@ -101,7 +101,7 @@ export default function SettingsPage() {
                 >
                   <option value="en">English</option>
                   <option value="hi">Hindi</option>
-                  <option value="gu">Gujarati</option>
+                  <option value="es">Spanish</option>
                 </select>
               </div>
 
@@ -118,7 +118,7 @@ export default function SettingsPage() {
                 >
                   <option value="en">English</option>
                   <option value="hi">Hindi</option>
-                  <option value="gu">Gujarati</option>
+                  <option value="es">Spanish</option>
                 </select>
               </div>
 

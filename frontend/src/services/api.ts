@@ -48,17 +48,21 @@ export interface User {
   avatar_url: string | null;
 }
 
+export type RecordingStatus = "none" | "recording" | "stopped" | "failed";
+
 export interface Meeting {
   id: string;
   room_code: string;
   title: string;
   host_id: string;
   status: "scheduled" | "active" | "ended";
-  is_recording: boolean;
+  recording_status: RecordingStatus;
   scheduled_at: string | null;
   started_at: string | null;
   ended_at: string | null;
   created_at: string;
+  chime_meeting?: Record<string, unknown> | null;
+  chime_attendee?: Record<string, unknown> | null;
 }
 
 export interface UserSettings {
@@ -156,31 +160,29 @@ export async function fetchSummary(roomCode: string): Promise<MeetingSummary> {
   return data;
 }
 
-export async function uploadRecording(roomCode: string, blob: Blob): Promise<{ filename: string }> {
-  const formData = new FormData();
-  const extension = blob.type.startsWith("video/mp4") ? "mp4" : "webm";
-  formData.append("file", blob, `recording.${extension}`);
-  const { data } = await api.post<{ filename: string }>(`/meetings/${roomCode}/recordings`, formData, {
-    headers: { "Content-Type": "multipart/form-data" },
-  });
-  return data;
-}
-
 export async function listRecordings(roomCode: string): Promise<string[]> {
   const { data } = await api.get<string[]>(`/meetings/${roomCode}/recordings`);
   return data;
 }
 
 export async function downloadRecording(roomCode: string, filename: string): Promise<void> {
-  const { data } = await api.get(`/meetings/${roomCode}/recordings/${filename}`, {
-    responseType: "blob",
-  });
-  const url = URL.createObjectURL(data as Blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  link.click();
-  URL.revokeObjectURL(url);
+  const { data } = await api.get<{ url: string }>(`/meetings/${roomCode}/recordings/${filename}`);
+  window.open(data.url, "_blank");
+}
+
+export async function startRecording(roomCode: string): Promise<{ status: RecordingStatus }> {
+  const { data } = await api.post<{ status: RecordingStatus }>(`/meetings/${roomCode}/recording/start`);
+  return data;
+}
+
+export async function stopRecording(roomCode: string): Promise<{ status: RecordingStatus }> {
+  const { data } = await api.post<{ status: RecordingStatus }>(`/meetings/${roomCode}/recording/stop`);
+  return data;
+}
+
+export async function getRecordingStatus(roomCode: string): Promise<{ status: RecordingStatus }> {
+  const { data } = await api.get<{ status: RecordingStatus }>(`/meetings/${roomCode}/recording-status`);
+  return data;
 }
 
 export type ConsultationStatus = "waiting" | "active" | "completed";
@@ -214,11 +216,8 @@ export interface JoinPatientLinkResult {
   session: ConsultationSession;
   room_code: string | null;
   access_token: string | null;
-}
-
-export async function fetchIceServers(): Promise<RTCIceServer[]> {
-  const { data } = await api.get<{ iceServers: RTCIceServer[] }>("/meetings/ice-servers");
-  return data.iceServers;
+  chime_meeting?: Record<string, unknown> | null;
+  chime_attendee?: Record<string, unknown> | null;
 }
 
 export async function getMeetingAccessInfo(roomCode: string): Promise<{ is_doctor_room: boolean; is_host: boolean }> {
@@ -226,9 +225,13 @@ export async function getMeetingAccessInfo(roomCode: string): Promise<{ is_docto
   return data;
 }
 
-export async function adminLogin(password: string): Promise<string> {
-  const { data } = await api.post<{ token: string }>("/admin/login", { password });
+export async function adminLogin(userId: string, password: string): Promise<string> {
+  const { data } = await api.post<{ token: string }>("/admin/login", { user_id: userId, password });
   return data.token;
+}
+
+export async function createAdminAccount(masterPassword: string, userId: string, password: string): Promise<void> {
+  await api.post("/admin/accounts", { master_password: masterPassword, user_id: userId, password });
 }
 
 export async function createDoctorRoom(title: string): Promise<Meeting> {
@@ -277,19 +280,16 @@ export async function listSessionRecordings(sessionId: string): Promise<string[]
 }
 
 export async function downloadSessionRecording(sessionId: string, filename: string): Promise<void> {
-  const { data } = await api.get(`/admin/sessions/${sessionId}/recordings/${filename}`, {
-    responseType: "blob",
-  });
-  const url = URL.createObjectURL(data as Blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  link.click();
-  URL.revokeObjectURL(url);
+  const { data } = await api.get<{ url: string }>(`/admin/sessions/${sessionId}/recordings/${filename}`);
+  window.open(data.url, "_blank");
 }
 
-export async function getPatientLinkInfo(code: string): Promise<{ room_code: string; title: string; patient_name: string }> {
-  const { data } = await api.get<{ room_code: string; title: string; patient_name: string }>(`/patient-links/${code}`);
+export async function getPatientLinkInfo(
+  code: string
+): Promise<{ room_code: string; title: string; patient_name: string; expired: boolean }> {
+  const { data } = await api.get<{ room_code: string; title: string; patient_name: string; expired: boolean }>(
+    `/patient-links/${code}`
+  );
   return data;
 }
 

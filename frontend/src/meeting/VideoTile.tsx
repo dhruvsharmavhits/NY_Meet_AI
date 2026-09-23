@@ -2,9 +2,10 @@ import { useEffect, useRef } from "react";
 import { MicOffIcon } from "@/components/Icons";
 
 interface VideoTileProps {
-  stream: MediaStream | null;
+  tileId: number | null;
+  onBind: (tileId: number, el: HTMLVideoElement) => void;
+  onUnbind: (tileId: number) => void;
   label: string;
-  muted?: boolean;
   mirrored?: boolean;
   micMuted?: boolean;
   cameraOff?: boolean;
@@ -50,162 +51,29 @@ function initialsFor(name: string): string {
   return (parts[0][0] + parts[1][0]).toUpperCase();
 }
 
-
-
 export function VideoTile({
-  stream,
+  tileId,
+  onBind,
+  onUnbind,
   label,
-  muted = false,
   mirrored,
   micMuted,
   cameraOff,
 }: VideoTileProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const audioRef = useRef<HTMLAudioElement>(null);
 
-  /*
-   * VIDEO
-   *
-   * Only give video tracks to the video element.
-   * For local muted preview, this also prevents the microphone
-   * from being consumed by the preview element.
-   */
+  // Chime binds/unbinds the video stream imperatively onto this element by
+  // tileId — there is no MediaStream to hand the <video> element directly.
   useEffect(() => {
     const video = videoRef.current;
+    if (!video || tileId === null) return;
 
-    if (!video) return;
-
-    const videoTracks = stream?.getVideoTracks() ?? [];
-
-    const videoStream =
-      videoTracks.length > 0
-        ? new MediaStream(videoTracks)
-        : null;
-
-    video.srcObject = videoStream;
-
-    // console.log(
-    //   `[rtc] VideoTile video srcObject set ${JSON.stringify({
-    //     label,
-    //     streamId: stream?.id ?? null,
-    //     videoTracks: videoTracks.map((track) => ({
-    //       id: track.id,
-    //       readyState: track.readyState,
-    //       enabled: track.enabled,
-    //       muted: track.muted,
-    //     })),
-    //     localMuted: muted,
-    //   })}`
-    // );
-
-    if (videoStream) {
-      video.play().catch((err) => {
-        // console.log(
-        //   `[rtc] VideoTile video play rejected ${JSON.stringify({
-        //     label,
-        //     error: String(err),
-        //   })}`
-        // );
-      });
-    }
-
-    return () => {
-      video.pause();
-      video.srcObject = null;
-    };
-  }, [stream, label, muted]);
-
-  /*
-   * AUDIO
-   *
-   * Remote audio gets its own dedicated <audio> element.
-   *
-   * This is the important change.
-   *
-   * Never use the muted local-preview video element to play
-   * remote audio.
-   */
-  useEffect(() => {
-    const audio = audioRef.current;
-
-    if (!audio) return;
-
-    // Local preview should NEVER play its own microphone.
-    if (muted) {
-      audio.pause();
-      audio.srcObject = null;
-
-      // console.log(
-      //   `[rtc] VideoTile local audio disabled ${JSON.stringify({
-      //     label,
-      //   })}`
-      // );
-
-      return;
-    }
-
-    const audioTracks = stream?.getAudioTracks() ?? [];
-
-    const audioStream =
-      audioTracks.length > 0
-        ? new MediaStream(audioTracks)
-        : null;
-
-    audio.srcObject = audioStream;
-
-    // console.log(
-    //   `[rtc] VideoTile audio srcObject set ${JSON.stringify({
-    //     label,
-    //     streamId: stream?.id ?? null,
-    //     audioTracks: audioTracks.map((track) => ({
-    //       id: track.id,
-    //       readyState: track.readyState,
-    //       enabled: track.enabled,
-    //       muted: track.muted,
-    //     })),
-    //   })}`
-    // );
-
-    if (!audioStream) {
-      audio.pause();
-      return;
-    }
-
-    audio.volume = 1;
-    audio.muted = false;
-
-    const playAudio = async () => {
-      try {
-        await audio.play();
-
-        // console.log(
-        //   `[rtc] 🔊 VideoTile remote audio PLAYING ${JSON.stringify({
-        //     label,
-        //     streamId: stream?.id ?? null,
-        //     audioTracks: audioStream.getAudioTracks().length,
-        //   })}`
-        // );
-      } catch (err) {
-        console.error(
-          `[rtc] ❌ VideoTile remote audio PLAY FAILED`,
-          {
-            label,
-            error: String(err),
-          }
-        );
-      }
-    };
-
-    playAudio();
-
-    return () => {
-      audio.pause();
-      audio.srcObject = null;
-    };
-  }, [stream, label, muted]);
+    onBind(tileId, video);
+    return () => onUnbind(tileId);
+  }, [tileId, onBind, onUnbind]);
 
   const avatarColor = colorForName(label);
-  const showAvatar = !stream || cameraOff;
+  const showAvatar = tileId === null || cameraOff;
 
   return (
     <div className="group relative h-full w-full overflow-hidden rounded-2xl bg-[#1e1e2e] transition-all duration-300">
@@ -219,13 +87,6 @@ export function VideoTile({
         className={`h-full w-full object-contain ${
           mirrored ? "-scale-x-100" : ""
         } ${showAvatar ? "hidden" : ""}`}
-      />
-
-      {/* Dedicated remote audio element */}
-      <audio
-        ref={audioRef}
-        autoPlay
-        playsInline
       />
 
       {showAvatar && (

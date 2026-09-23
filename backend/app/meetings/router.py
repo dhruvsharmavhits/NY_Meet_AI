@@ -1,25 +1,19 @@
 from datetime import datetime, timezone
-from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse
+from botocore.exceptions import ClientError
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.aws import chime
+from app.config import settings
 from app.database import get_db
 from app.models import ConsultationSession, ConsultationStatus, Meeting, MeetingParticipant, MeetingStatus, PatientLink, TranscriptEntry, User
 from app.schemas.meeting import CreateMeetingRequest, MeetingResponse, UpdateMeetingRequest
 from app.schemas.transcript import MeetingSummaryResponse, TranscriptEntryResponse
-from app.meetings.ice import build_ice_servers
-from app.storage.local_storage import get_file_path, list_files, save_stream
-from app.storage.video_convert import convert_to_mp4
+from app.storage.s3_storage import get_presigned_url, list_final_recordings
 from app.users.dependencies import get_current_user
 
 router = APIRouter(prefix="/meetings", tags=["meetings"])
-
-
-@router.get("/ice-servers")
-def get_ice_servers(current_user: User = Depends(get_current_user)) -> dict[str, list[dict]]:
-    return {"iceServers": build_ice_servers(current_user.id)}
 
 
 def _get_meeting_or_404(room_code: str, db: Session) -> Meeting:
@@ -27,6 +21,45 @@ def _get_meeting_or_404(room_code: str, db: Session) -> Meeting:
     if meeting is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting not found")
     return meeting
+
+
+def ensure_chime_meeting(meeting: Meeting, db: Session) -> dict:
+    """Lazily create the Chime meeting backing this room on first join, so a
+    scheduled/reactivated meeting gets a fresh Chime meeting each time.
+    Returns the {"Meeting": {...}} shape amazon-chime-sdk-js's
+    MeetingSessionConfiguration expects verbatim."""
+    if meeting.chime_meeting_id is None:
+        try:
+            chime_meeting = chime.create_meeting(meeting.id)
+        except ClientError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        meeting.chime_meeting_id = chime_meeting["MeetingId"]
+        meeting.chime_meeting_arn = chime_meeting["MeetingArn"]
+        db.commit()
+        db.refresh(meeting)
+        return {"Meeting": chime_meeting}
+    try:
+        chime_meeting = chime.get_meeting(meeting.chime_meeting_id)
+    except ClientError:
+        # the Chime meeting expired (idle ~5h) or was otherwise reaped — create a fresh one
+        try:
+            chime_meeting = chime.create_meeting(meeting.id)
+        except ClientError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        meeting.chime_meeting_id = chime_meeting["MeetingId"]
+        meeting.chime_meeting_arn = chime_meeting["MeetingArn"]
+        db.commit()
+        db.refresh(meeting)
+    return {"Meeting": chime_meeting}
+
+
+def create_chime_attendee(meeting: Meeting, user_id: str) -> dict:
+    """Returns the {"Attendee": {...}} shape amazon-chime-sdk-js's
+    MeetingSessionConfiguration expects verbatim."""
+    try:
+        return {"Attendee": chime.create_attendee(meeting.chime_meeting_id, user_id)}
+    except ClientError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
 
 @router.post("", response_model=MeetingResponse, status_code=status.HTTP_201_CREATED)
@@ -97,6 +130,11 @@ def update_meeting(
     return meeting
 
 
+def _require_host_or_admin(meeting: Meeting, current_user: User) -> None:
+    if meeting.host_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the host can do this")
+
+
 @router.post("/{room_code}/join", response_model=MeetingResponse)
 def join_meeting(
     room_code: str,
@@ -114,6 +152,12 @@ def join_meeting(
     db.add(MeetingParticipant(meeting_id=meeting.id, user_id=current_user.id))
     db.commit()
     db.refresh(meeting)
+
+    chime_meeting = ensure_chime_meeting(meeting, db)
+    chime_attendee = create_chime_attendee(meeting, current_user.id)
+
+    meeting.chime_meeting = chime_meeting
+    meeting.chime_attendee = chime_attendee
     return meeting
 
 
@@ -206,51 +250,94 @@ def get_summary(
     )
 
 
-@router.post("/{room_code}/recordings", status_code=status.HTTP_201_CREATED)
-async def upload_recording(
-    room_code: str,
-    background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> dict[str, str]:
-    meeting = _get_meeting_or_404(room_code, db)
-    active_session = (
-        db.query(ConsultationSession)
-        .filter(ConsultationSession.room_id == meeting.id, ConsultationSession.status == ConsultationStatus.ACTIVE)
-        .first()
-    )
-    subpath_id = active_session.id if active_session else meeting.id
-    is_mp4 = (file.filename or "").endswith(".mp4") or file.content_type == "video/mp4"
-    stem = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-    extension = "mp4" if is_mp4 else "webm"
-    filename = f"{stem}.{extension}"
-    saved = save_stream(f"meeting-recording/{subpath_id}", filename, file.file)
-    if not is_mp4:
-        background_tasks.add_task(_convert_recording, saved)
-    return {"filename": filename}
-
-
-def _convert_recording(source: Path) -> None:
-    """Transcode after the response is sent, keeping the WebM if ffmpeg fails."""
-    target = source.with_suffix(".mp4")
-    try:
-        convert_to_mp4(source, target)
-    except Exception:
-        target.unlink(missing_ok=True)
-        return
-    source.unlink(missing_ok=True)
-
-
 def _recording_subpath_ids(meeting: Meeting, db: Session) -> list[str]:
     """Recordings are saved under the active consultation session's id when one
-    exists at upload time, else the meeting's id. Check every subpath a
+    exists at record-start time, else the meeting's id. Check every subpath a
     recording for this meeting could have landed in."""
     session_ids = [
         row[0]
         for row in db.query(ConsultationSession.id).filter(ConsultationSession.room_id == meeting.id).all()
     ]
     return [meeting.id, *session_ids]
+
+
+@router.post("/{room_code}/recording/start")
+def start_recording(
+    room_code: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    meeting = _get_meeting_or_404(room_code, db)
+    _require_host_or_admin(meeting, current_user)
+    if meeting.chime_meeting_id is None or meeting.chime_meeting_arn is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Meeting has not started")
+
+    active_session = (
+        db.query(ConsultationSession)
+        .filter(ConsultationSession.room_id == meeting.id, ConsultationSession.status == ConsultationStatus.ACTIVE)
+        .first()
+    )
+    subpath_id = active_session.id if active_session else meeting.id
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    prefix = f"meeting-recording/{subpath_id}/{timestamp}"
+
+    try:
+        pipeline = chime.start_composited_capture(meeting.chime_meeting_arn, settings.aws_recordings_bucket, prefix)
+    except ClientError as exc:
+        meeting.recording_status = "failed"
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    meeting.media_pipeline_id = pipeline["MediaPipelineId"]
+    meeting.media_pipeline_arn = pipeline["MediaPipelineArn"]
+    meeting.recording_s3_prefix = prefix
+    meeting.recording_status = "recording"
+    db.commit()
+    return {"status": meeting.recording_status}
+
+
+@router.post("/{room_code}/recording/stop")
+def stop_recording(
+    room_code: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    meeting = _get_meeting_or_404(room_code, db)
+    _require_host_or_admin(meeting, current_user)
+
+    if meeting.media_pipeline_id is not None:
+        try:
+            chime.stop_composited_capture(meeting.media_pipeline_id)
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") != "NotFoundException":
+                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+        # the capture pipeline only wrote rolling fragments — stitch them into
+        # the single file admins actually download. Best-effort: a failure
+        # here shouldn't block "stopped", it just means no final file appears.
+        if meeting.media_pipeline_arn and meeting.recording_s3_prefix:
+            try:
+                chime.start_concatenation(
+                    meeting.media_pipeline_arn, settings.aws_recordings_bucket, f"{meeting.recording_s3_prefix}/final"
+                )
+            except ClientError as exc:
+                print(f"[recording] concatenation failed for meeting {meeting.id}: {exc}", flush=True)
+
+    meeting.media_pipeline_id = None
+    meeting.media_pipeline_arn = None
+    meeting.recording_status = "stopped"
+    db.commit()
+    return {"status": meeting.recording_status}
+
+
+@router.get("/{room_code}/recording-status")
+def get_recording_status(
+    room_code: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    meeting = _get_meeting_or_404(room_code, db)
+    return {"status": meeting.recording_status}
 
 
 @router.get("/{room_code}/recordings")
@@ -262,24 +349,23 @@ def list_recordings(
     meeting = _get_meeting_or_404(room_code, db)
     filenames: list[str] = []
     for subpath_id in _recording_subpath_ids(meeting, db):
-        filenames.extend(list_files(f"meeting-recording/{subpath_id}"))
+        filenames.extend(list_final_recordings(f"meeting-recording/{subpath_id}"))
     return sorted(filenames)
 
 
-@router.get("/{room_code}/recordings/{filename}")
+@router.get("/{room_code}/recordings/{filename:path}")
 def download_recording(
     room_code: str,
     filename: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> FileResponse:
+) -> dict[str, str]:
     meeting = _get_meeting_or_404(room_code, db)
-    file_path = None
+    url = None
     for subpath_id in _recording_subpath_ids(meeting, db):
-        file_path = get_file_path(f"meeting-recording/{subpath_id}", filename)
-        if file_path is not None:
+        url = get_presigned_url(f"meeting-recording/{subpath_id}", filename)
+        if url is not None:
             break
-    if file_path is None:
+    if url is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found")
-    media_type = "video/mp4" if filename.endswith(".mp4") else "video/webm"
-    return FileResponse(file_path, media_type=media_type, filename=filename)
+    return {"url": url}

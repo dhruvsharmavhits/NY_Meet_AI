@@ -1,24 +1,55 @@
+import hashlib
+import hmac
 import secrets
 
-from fastapi import Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
+from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.database import get_db
+from app.models import Admin
 
 
-def issue_token(password: str) -> str:
-    if not secrets.compare_digest(password, settings.admin_password):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin password")
-    # the token IS the password, checked directly against settings on every
-    # request — no server-side session state to lose on a backend restart
-    # (this auth is intentionally lightweight: it only exists to keep
-    # patients away from meeting-creation/admin functionality)
-    return password
+def hash_password(password: str) -> str:
+    salt = secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 200_000).hex()
+    return f"{salt}${digest}"
 
 
-def require_admin(x_admin_token: str = Header(...)) -> None:
-    if not is_valid_admin_token(x_admin_token):
+def verify_password(password: str, password_hash: str) -> bool:
+    try:
+        salt, digest = password_hash.split("$", 1)
+    except ValueError:
+        return False
+    candidate = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 200_000).hex()
+    return hmac.compare_digest(candidate, digest)
+
+
+def create_admin(db: Session, master_password: str, user_id: str, password: str) -> Admin:
+    if not secrets.compare_digest(master_password, settings.admin_master_password):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid master password")
+    if db.query(Admin).filter(Admin.user_id == user_id).first() is not None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User ID already taken")
+    admin = Admin(user_id=user_id, password_hash=hash_password(password))
+    db.add(admin)
+    db.commit()
+    db.refresh(admin)
+    return admin
+
+
+def issue_token(db: Session, user_id: str, password: str) -> str:
+    admin = db.query(Admin).filter(Admin.user_id == user_id).first()
+    if admin is None or not verify_password(password, admin.password_hash):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid user ID or password")
+    admin.token = secrets.token_urlsafe(32)
+    db.commit()
+    return admin.token
+
+
+def is_valid_admin_token(token: str | None, db: Session) -> bool:
+    return bool(token) and db.query(Admin).filter(Admin.token == token).first() is not None
+
+
+def require_admin(x_admin_token: str = Header(...), db: Session = Depends(get_db)) -> None:
+    if not is_valid_admin_token(x_admin_token, db):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
-
-
-def is_valid_admin_token(token: str | None) -> bool:
-    return bool(token) and secrets.compare_digest(token, settings.admin_password)

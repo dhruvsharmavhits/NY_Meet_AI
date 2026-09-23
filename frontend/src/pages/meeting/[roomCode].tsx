@@ -2,13 +2,11 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { adminLogin, fetchMySettings, fetchTranscript, getMeeting, getMeetingAccessInfo, getQueue, joinMeeting, leaveMeeting, updateMySettings, updateProfile, uploadRecording } from "@/services/api";
+import { adminLogin, fetchMySettings, fetchTranscript, getMeeting, getMeetingAccessInfo, getQueue, getRecordingStatus, joinMeeting, leaveMeeting, startRecording, stopRecording, updateMySettings, updateProfile } from "@/services/api";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useAuthStore } from "@/store/authStore";
 import { NamePrompt } from "@/components/NamePrompt";
 import { useMeetingRoom } from "@/meeting/useMeetingRoom";
-import { useRecorder } from "@/meeting/useRecorder";
-import type { CompositorState } from "@/meeting/recordingCompositor";
 import { PreJoinLobby } from "@/meeting/PreJoinLobby";
 import { VideoGrid } from "@/meeting/VideoGrid";
 import { Toolbar } from "@/meeting/Toolbar";
@@ -46,6 +44,10 @@ export default function MeetingRoomPage() {
   const [joinStream, setJoinStream] = useState<MediaStream | null>(null);
   const [joinMicOn, setJoinMicOn] = useState(true);
   const [joinCameraOn, setJoinCameraOn] = useState(true);
+  const [chimeJoin, setChimeJoin] = useState<{
+    chime_meeting: Record<string, unknown> | null;
+    chime_attendee: Record<string, unknown> | null;
+  } | null>(null);
 
   const [chatOpen, setChatOpen] = useState(false);
   const [participantsOpen, setParticipantsOpen] = useState(false);
@@ -74,6 +76,7 @@ export default function MeetingRoomPage() {
   const accessTokenParam = typeof router.query.token === "string" ? router.query.token : undefined;
   const autoJoinStartedRef = useRef(false);
 
+  const [gateUserId, setGateUserId] = useState("");
   const [gatePassword, setGatePassword] = useState("");
   const [gateError, setGateError] = useState<string | null>(null);
   const [gateSubmitting, setGateSubmitting] = useState(false);
@@ -92,7 +95,7 @@ export default function MeetingRoomPage() {
     setGateError(null);
     setGateSubmitting(true);
     try {
-      const token = await adminLogin(gatePassword);
+      const token = await adminLogin(gateUserId, gatePassword);
       localStorage.setItem("admin_token", token);
       setAdminUnlocked(true);
     } catch {
@@ -131,10 +134,6 @@ export default function MeetingRoomPage() {
   }, [phase]);
 
   const {
-    localStream,
-    screenStream,
-    remoteStreams,
-    remoteScreenStreams,
     participants,
     messages,
     captions,
@@ -147,6 +146,11 @@ export default function MeetingRoomPage() {
     error,
     consultationEnded,
     joinRejected,
+    localTileId,
+    localScreenTileId,
+    bindVideoTile,
+    unbindVideoTile,
+    bindAudioElement,
     sendChat,
     toggleMic,
     toggleCamera,
@@ -158,13 +162,17 @@ export default function MeetingRoomPage() {
     initialMicOn: joinMicOn,
     initialCameraOn: joinCameraOn,
     accessToken: accessTokenParam,
+    chimeMeeting: chimeJoin?.chime_meeting,
+    chimeAttendee: chimeJoin?.chime_attendee,
   });
 
-  const { recording, start: startRecording, stop: stopRecording, updateState: updateRecorderState } = useRecorder();
-  const recordingRef = useRef(recording);
-  recordingRef.current = recording;
-  const roomCodeRef = useRef(roomCode);
-  roomCodeRef.current = roomCode;
+  const { data: recordingStatusData } = useQuery({
+    queryKey: ["recording-status", roomCode],
+    queryFn: () => getRecordingStatus(roomCode as string),
+    enabled: !!roomCode && phase === "call",
+    refetchInterval: 5000,
+  });
+  const recording = recordingStatusData?.status === "recording";
 
   const { data: recordedTranscript } = useQuery({
     queryKey: ["transcript", roomCode],
@@ -172,86 +180,6 @@ export default function MeetingRoomPage() {
     enabled: !!roomCode && recording && transcriptOpen,
     refetchInterval: 5000,
   });
-
-  const recorderSnapshot: CompositorState = {
-    roomCode: meeting?.room_code ?? roomCode ?? "",
-    currentTime,
-    elapsedLabel: formatDuration(elapsed),
-    connected,
-    reconnecting,
-    error: error ?? recordingError,
-    displayName: displayName || "You",
-    localStream,
-    screenStream,
-    remoteStreams,
-    remoteScreenStreams,
-    participants,
-    micOn,
-    micConnecting: !!micConnecting,
-    cameraOn,
-    screenSharing,
-    captionsOn,
-    captions,
-    myCaptionLanguage: mySettings?.caption_language ?? "en",
-    captionPosition: mySettings?.caption_position ?? "bottom",
-    captionFontSize: mySettings?.caption_font_size ?? 16,
-    showOriginalCaptions,
-    chatOpen,
-    messages,
-    participantsOpen,
-    transcriptOpen,
-    transcriptEntries: recordedTranscript ?? [],
-    queueOpen,
-    queue: queueForBadge ?? [],
-    showQueue,
-    moreMenuOpen,
-  };
-
-  useEffect(() => {
-    if (recording) updateRecorderState(recorderSnapshot);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    recording,
-    currentTime,
-    elapsed,
-    connected,
-    reconnecting,
-    error,
-    recordingError,
-    displayName,
-    localStream,
-    screenStream,
-    remoteStreams,
-    remoteScreenStreams,
-    participants,
-    micOn,
-    micConnecting,
-    cameraOn,
-    screenSharing,
-    captionsOn,
-    captions,
-    mySettings,
-    showOriginalCaptions,
-    chatOpen,
-    messages,
-    participantsOpen,
-    transcriptOpen,
-    recordedTranscript,
-    queueOpen,
-    queueForBadge,
-    showQueue,
-    moreMenuOpen,
-  ]);
-
-  useEffect(() => {
-    return () => {
-      if (recordingRef.current) {
-        stopRecording().then((blob) => {
-          if (blob && roomCodeRef.current) uploadRecording(roomCodeRef.current, blob).catch(() => {});
-        });
-      }
-    };
-  }, [stopRecording]);
 
   async function handleLobbyJoin(name: string, stream: MediaStream | null, micOnAtJoin: boolean, cameraOnAtJoin: boolean, captionLanguage: string) {
     setDisplayName(name);
@@ -277,9 +205,10 @@ export default function MeetingRoomPage() {
     }
     if (roomCode) {
       try {
-        await joinMeeting(roomCode);
+        const joined = await joinMeeting(roomCode);
+        setChimeJoin({ chime_meeting: joined.chime_meeting ?? null, chime_attendee: joined.chime_attendee ?? null });
       } catch {
-        // meeting may already be active for this user; proceed regardless
+        setRecordingError("Could not connect to the meeting. Please try again.");
       }
     }
     setJoinStream(stream);
@@ -322,47 +251,31 @@ export default function MeetingRoomPage() {
 
   useEffect(() => {
     if (!consultationEnded) return;
-    localStream?.getTracks().forEach((t) => t.stop());
+    joinStream?.getTracks().forEach((t) => t.stop());
     router.replace("/consultation-ended");
-  }, [consultationEnded, localStream, router]);
+  }, [consultationEnded, joinStream, router]);
 
   useEffect(() => {
     if (!joinRejected) return;
-    localStream?.getTracks().forEach((t) => t.stop());
-  }, [joinRejected, localStream]);
+    joinStream?.getTracks().forEach((t) => t.stop());
+  }, [joinRejected, joinStream]);
 
   async function handleToggleRecording() {
     if (!roomCode) return;
     setRecordingError(null);
-    if (recording) {
-      const blob = await stopRecording();
-      if (blob) {
-        try {
-          await uploadRecording(roomCode, blob);
-        } catch {
-          setRecordingError("Failed to upload recording.");
-        }
+    try {
+      if (recording) {
+        await stopRecording(roomCode);
+      } else {
+        await startRecording(roomCode);
       }
-    } else {
-      try {
-        await startRecording(recorderSnapshot);
-      } catch {
-        setRecordingError("Could not start recording.");
-      }
+      queryClient.invalidateQueries({ queryKey: ["recording-status", roomCode] });
+    } catch {
+      setRecordingError(recording ? "Failed to stop recording." : "Could not start recording.");
     }
   }
 
   async function handleLeave() {
-    if (recording) {
-      const blob = await stopRecording();
-      if (blob && roomCode) {
-        try {
-          await uploadRecording(roomCode, blob);
-        } catch {
-          // best-effort
-        }
-      }
-    }
     if (roomCode) {
       try {
         await leaveMeeting(roomCode);
@@ -473,10 +386,19 @@ export default function MeetingRoomPage() {
 
             <form onSubmit={handleGateSubmit} className="space-y-5">
               <input
+                id="meeting-admin-userid-input"
+                type="text"
+                required
+                autoFocus
+                value={gateUserId}
+                onChange={(e) => setGateUserId(e.target.value)}
+                placeholder="User ID"
+                className="input-modern w-full"
+              />
+              <input
                 id="meeting-admin-password-input"
                 type="password"
                 required
-                autoFocus
                 value={gatePassword}
                 onChange={(e) => setGatePassword(e.target.value)}
                 placeholder="Admin password"
@@ -485,7 +407,7 @@ export default function MeetingRoomPage() {
               <button
                 id="meeting-admin-gate-submit"
                 type="submit"
-                disabled={gateSubmitting || !gatePassword}
+                disabled={gateSubmitting || !gateUserId || !gatePassword}
                 className="btn-gradient w-full rounded-2xl py-4 text-base"
               >
                 {gateSubmitting ? "Signing in..." : "Sign in"}
@@ -572,16 +494,19 @@ export default function MeetingRoomPage() {
       <div className="relative flex flex-1 overflow-hidden">
         {/* Video grid */}
         <VideoGrid
-          localStream={localStream}
-          screenStream={screenStream}
+          localTileId={localTileId}
+          localScreenTileId={localScreenTileId}
+          onBindVideoTile={bindVideoTile}
+          onUnbindVideoTile={unbindVideoTile}
           localName={displayName || "You"}
           micOn={micOn}
           cameraOn={cameraOn}
           screenSharing={screenSharing}
-          remoteStreams={remoteStreams}
-          remoteScreenStreams={remoteScreenStreams}
           participants={participants}
         />
+
+        {/* Chime's mixed remote audio plays through this single hidden element */}
+        <audio ref={bindAudioElement} autoPlay style={{ display: "none" }} />
 
         {/* Caption overlay */}
         {captionsOn && (

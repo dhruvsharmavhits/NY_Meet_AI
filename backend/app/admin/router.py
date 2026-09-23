@@ -2,10 +2,9 @@ import secrets
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from app.admin.auth import issue_token, require_admin
+from app.admin.auth import create_admin, issue_token, require_admin
 from app.database import get_db
 from app.models import (
     ConsultationSession,
@@ -18,16 +17,18 @@ from app.models import (
 )
 from app.schemas.meeting import MeetingResponse
 from app.schemas.patient import (
+    AdminAccountResponse,
     AdminLoginRequest,
     AdminLoginResponse,
     ConsultationSessionResponse,
+    CreateAdminAccountRequest,
     CreatePatientLinkRequest,
     CreateRoomRequest,
     PatientLinkResponse,
     PatientLinkWithSessionResponse,
 )
 from app.schemas.transcript import TranscriptEntryResponse
-from app.storage.local_storage import get_file_path, list_files
+from app.storage.s3_storage import get_presigned_url, list_final_recordings
 from app.users.dependencies import get_current_user
 from app.websocket.socket_manager import kick_patient
 
@@ -78,8 +79,14 @@ def _get_session_or_404(session_id: str, db: Session) -> ConsultationSession:
 
 
 @router.post("/login", response_model=AdminLoginResponse)
-def admin_login(payload: AdminLoginRequest) -> AdminLoginResponse:
-    return AdminLoginResponse(token=issue_token(payload.password))
+def admin_login(payload: AdminLoginRequest, db: Session = Depends(get_db)) -> AdminLoginResponse:
+    return AdminLoginResponse(token=issue_token(db, payload.user_id, payload.password))
+
+
+@router.post("/accounts", response_model=AdminAccountResponse, status_code=status.HTTP_201_CREATED)
+def create_admin_account(payload: CreateAdminAccountRequest, db: Session = Depends(get_db)) -> AdminAccountResponse:
+    admin = create_admin(db, payload.master_password, payload.user_id, payload.password)
+    return AdminAccountResponse.model_validate(admin)
 
 
 @router.post("/rooms", response_model=MeetingResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_admin)])
@@ -240,13 +247,13 @@ def get_session_transcript(session_id: str, db: Session = Depends(get_db)) -> li
 )
 def list_session_recordings(session_id: str, db: Session = Depends(get_db)) -> list[str]:
     _get_session_or_404(session_id, db)
-    return list_files(f"meeting-recording/{session_id}")
+    return list_final_recordings(f"meeting-recording/{session_id}")
 
 
-@router.get("/sessions/{session_id}/recordings/{filename}", dependencies=[Depends(require_admin)])
-def download_session_recording(session_id: str, filename: str, db: Session = Depends(get_db)) -> FileResponse:
+@router.get("/sessions/{session_id}/recordings/{filename:path}", dependencies=[Depends(require_admin)])
+def download_session_recording(session_id: str, filename: str, db: Session = Depends(get_db)) -> dict[str, str]:
     _get_session_or_404(session_id, db)
-    file_path = get_file_path(f"meeting-recording/{session_id}", filename)
-    if file_path is None:
+    url = get_presigned_url(f"meeting-recording/{session_id}", filename)
+    if url is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found")
-    return FileResponse(file_path, media_type="video/webm", filename=filename)
+    return {"url": url}

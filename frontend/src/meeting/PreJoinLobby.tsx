@@ -195,7 +195,7 @@ export function PreJoinLobby({ meetingTitle, roomCode, defaultName, defaultCapti
               >
                 <option value="en">English</option>
                 <option value="hi">Hindi</option>
-                <option value="gu">Gujarati</option>
+                <option value="es">Spanish</option>
               </select>
             </div>
 

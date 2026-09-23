@@ -33,7 +33,6 @@ ISO_TO_FLORES: dict[str, str] = {
     "ta": "tam_Taml",
     "te": "tel_Telu",
     "mr": "mar_Deva",
-    "gu": "guj_Gujr",
     "pa": "pan_Guru",
 }
 

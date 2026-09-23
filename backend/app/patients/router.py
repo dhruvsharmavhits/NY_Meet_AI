@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import ConsultationSession, ConsultationStatus, PatientLink, User
+from app.meetings.router import create_chime_attendee, ensure_chime_meeting
+from app.models import ConsultationSession, ConsultationStatus, Meeting, PatientLink, User
 from app.schemas.patient import ConsultationSessionResponse, JoinPatientLinkResponse, RoomPublicResponse
 from app.users.dependencies import get_current_user
 
@@ -59,10 +60,21 @@ def _requeue_if_reconnecting(session: ConsultationSession, db: Session) -> None:
         db.refresh(session)
 
 
+def _chime_join_info(session: ConsultationSession, current_user: User, db: Session) -> tuple[dict, dict]:
+    room = db.get(Meeting, session.room_id)
+    chime_meeting = ensure_chime_meeting(room, db)
+    chime_attendee = create_chime_attendee(room, current_user.id)
+    return chime_meeting, chime_attendee
+
+
 @router.get("/{code}", response_model=RoomPublicResponse)
 def get_patient_link(code: str, db: Session = Depends(get_db)) -> RoomPublicResponse:
     link = _get_link_or_404(code, db)
-    return RoomPublicResponse(room_code=link.room.room_code, title=link.room.title, patient_name=link.label or "Patient")
+    session = db.query(ConsultationSession).filter(ConsultationSession.patient_link_id == link.id).first()
+    expired = session is not None and session.status == ConsultationStatus.COMPLETED
+    return RoomPublicResponse(
+        room_code=link.room.room_code, title=link.room.title, patient_name=link.label or "Patient", expired=expired
+    )
 
 
 @router.post("/{code}/join", response_model=JoinPatientLinkResponse)
@@ -93,10 +105,13 @@ def join_patient_link(
     db.refresh(session)
     _requeue_if_reconnecting(session, db)
     active = session.status == ConsultationStatus.ACTIVE
+    chime_meeting, chime_attendee = _chime_join_info(session, current_user, db) if active else (None, None)
     return JoinPatientLinkResponse(
         session=_session_response(db, session),
         room_code=link.room.room_code if active else None,
         access_token=session.access_token if active else None,
+        chime_meeting=chime_meeting,
+        chime_attendee=chime_attendee,
     )
 
 
@@ -112,8 +127,11 @@ def get_session(
     if session.patient_user_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not your session")
     active = session.status == ConsultationStatus.ACTIVE
+    chime_meeting, chime_attendee = _chime_join_info(session, current_user, db) if active else (None, None)
     return JoinPatientLinkResponse(
         session=_session_response(db, session),
         room_code=session.room.room_code if active else None,
         access_token=session.access_token if active else None,
+        chime_meeting=chime_meeting,
+        chime_attendee=chime_attendee,
     )

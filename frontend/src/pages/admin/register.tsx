@@ -1,11 +1,12 @@
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/router";
 import Link from "next/link";
-import { adminLogin } from "@/services/api";
+import { createAdminAccount } from "@/services/api";
 import { LinguaMeetLogo } from "@/components/Icons";
 
-export default function AdminLoginPage() {
+export default function AdminRegisterPage() {
   const router = useRouter();
+  const [masterPassword, setMasterPassword] = useState("");
   const [userId, setUserId] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -16,11 +17,10 @@ export default function AdminLoginPage() {
     setError(null);
     setSubmitting(true);
     try {
-      const token = await adminLogin(userId, password);
-      localStorage.setItem("admin_token", token);
-      router.push("/admin");
-    } catch {
-      setError("Invalid user ID or password");
+      await createAdminAccount(masterPassword, userId, password);
+      router.push("/admin/login");
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || "Could not create admin account");
     } finally {
       setSubmitting(false);
     }
@@ -36,8 +36,8 @@ export default function AdminLoginPage() {
           <div className="mb-8 flex flex-col items-center gap-4">
             <LinguaMeetLogo size={48} />
             <div className="text-center">
-              <h1 className="text-2xl font-bold text-[#1a1a2e]">Admin login</h1>
-              <p className="mt-1 text-sm text-[#64748b]">Doctor/provider access only</p>
+              <h1 className="text-2xl font-bold text-[#1a1a2e]">Create admin account</h1>
+              <p className="mt-1 text-sm text-[#64748b]">Requires the master password</p>
             </div>
           </div>
 
@@ -49,17 +49,26 @@ export default function AdminLoginPage() {
 
           <form onSubmit={handleSubmit} className="space-y-5">
             <input
-              id="admin-userid-input"
-              type="text"
+              id="admin-master-password-input"
+              type="password"
               required
               autoFocus
+              value={masterPassword}
+              onChange={(e) => setMasterPassword(e.target.value)}
+              placeholder="Master password"
+              className="input-modern w-full"
+            />
+            <input
+              id="admin-register-userid-input"
+              type="text"
+              required
               value={userId}
               onChange={(e) => setUserId(e.target.value)}
               placeholder="User ID"
               className="input-modern w-full"
             />
             <input
-              id="admin-password-input"
+              id="admin-register-password-input"
               type="password"
               required
               value={password}
@@ -68,19 +77,19 @@ export default function AdminLoginPage() {
               className="input-modern w-full"
             />
             <button
-              id="admin-login-button"
+              id="admin-register-button"
               type="submit"
-              disabled={submitting || !userId || !password}
+              disabled={submitting || !masterPassword || !userId || !password}
               className="btn-gradient w-full rounded-2xl py-4 text-base"
             >
-              {submitting ? "Signing in..." : "Sign in"}
+              {submitting ? "Creating..." : "Create account"}
             </button>
           </form>
 
           <p className="mt-6 text-center text-sm text-[#64748b]">
-            Need an admin account?{" "}
-            <Link href="/admin/register" className="font-semibold text-[#4285f4]">
-              Create one
+            Already have an account?{" "}
+            <Link href="/admin/login" className="font-semibold text-[#4285f4]">
+              Sign in
             </Link>
           </p>
         </div>

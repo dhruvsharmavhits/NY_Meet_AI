@@ -34,12 +34,27 @@ def _migrate_schema() -> None:
             conn.execute(text("ALTER TABLE consultation_sessions ADD COLUMN access_token VARCHAR(64)"))
         except Exception:
             pass
+    for statement in (
+        "ALTER TABLE meetings ADD COLUMN chime_meeting_id VARCHAR(64)",
+        "ALTER TABLE meetings ADD COLUMN chime_meeting_arn VARCHAR(255)",
+        "ALTER TABLE meetings ADD COLUMN media_pipeline_id VARCHAR(64)",
+        "ALTER TABLE meetings ADD COLUMN media_pipeline_arn VARCHAR(255)",
+        "ALTER TABLE meetings ADD COLUMN recording_s3_prefix VARCHAR(255)",
+        "ALTER TABLE meetings ADD COLUMN recording_status VARCHAR(16) DEFAULT 'none' NOT NULL",
+    ):
+        with engine.begin() as conn:
+            try:
+                conn.execute(text(statement))
+            except Exception:
+                pass
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    print("[db] checking schema and creating any missing tables...", flush=True)
     Base.metadata.create_all(bind=engine)
     _migrate_schema()
+    print("[db] schema is up to date", flush=True)
     asyncio.create_task(asyncio.to_thread(warmup_translator))
     yield
 
@@ -48,7 +63,7 @@ app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
