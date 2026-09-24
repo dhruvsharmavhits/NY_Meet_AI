@@ -25,6 +25,7 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3000",
         "https://endorsed-depopulative-casie.ngrok-free.dev",
         "https://socket-baths-encourages-grand.trycloudflare.com",
+        "https://ny-meet.sandbox-nybest.com",
     ]
 
     # master password required to create a new admin account (see app/admin/auth.py) —

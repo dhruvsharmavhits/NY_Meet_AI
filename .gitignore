@@ -5,6 +5,7 @@ backend/*.db
 backend/.env
 backend/models/
 frontend/node_modules/
+turn/node_modules/
 frontend/.next/
 frontend/.env
 frontend/.env.local
@@ -16,3 +17,6 @@ storage/exports/*
 .DS_Store
 .antigravity
 NY_Meet_backend.zip
+storage/*
+CLAUDE.md
+*.db

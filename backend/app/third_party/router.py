@@ -72,22 +72,25 @@ def create_patient(
     app: ThirdPartyApp = Depends(get_third_party_app),
     db: Session = Depends(get_db),
 ) -> PatientResponse:
-    existing = (
-        db.query(Patient)
-        .filter(Patient.third_party_app_id == app.id, Patient.app_patient_id == payload.app_patient_id)
-        .first()
-    )
-    if existing is not None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Patient already exists")
-
     room = None
     if payload.room_code:
         room = _get_room_or_404(app, payload.room_code, db)
 
-    patient = Patient(
-        third_party_app_id=app.id, app_patient_id=payload.app_patient_id, patient_name=payload.patient_name
+    # a returning patient (same app_patient_id) gets a fresh link for their new
+    # meeting instead of erroring — one Patient can have many consultations
+    # over time, each with its own patient link.
+    patient = (
+        db.query(Patient)
+        .filter(Patient.third_party_app_id == app.id, Patient.app_patient_id == payload.app_patient_id)
+        .first()
     )
-    db.add(patient)
+    if patient is None:
+        patient = Patient(
+            third_party_app_id=app.id, app_patient_id=payload.app_patient_id, patient_name=payload.patient_name
+        )
+        db.add(patient)
+    else:
+        patient.patient_name = payload.patient_name
     db.commit()
     db.refresh(patient)
 
