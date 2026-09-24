@@ -88,23 +88,6 @@ export default function SettingsPage() {
             </div>
 
             <div className="space-y-5 px-7 py-6">
-              {/* Spoken language */}
-              <div>
-                <label htmlFor="spoken-language" className="mb-2 block text-xs font-semibold text-[#64748b] uppercase tracking-wider">
-                  Language you speak
-                </label>
-                <select
-                  id="spoken-language"
-                  value={settings.spoken_language}
-                  onChange={(e) => setSettings({ ...settings, spoken_language: e.target.value })}
-                  className="input-modern w-full"
-                >
-                  <option value="en">English</option>
-                  <option value="hi">Hindi</option>
-                  <option value="es">Spanish</option>
-                </select>
-              </div>
-
               {/* Caption language */}
               <div>
                 <label htmlFor="caption-language" className="mb-2 block text-xs font-semibold text-[#64748b] uppercase tracking-wider">

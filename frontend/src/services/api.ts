@@ -69,7 +69,6 @@ export interface Meeting {
 
 export interface UserSettings {
   caption_language: string;
-  spoken_language: string;  
   caption_position: "top" | "bottom";
   caption_font_size: number;
   dark_mode: boolean;

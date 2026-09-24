@@ -271,14 +271,6 @@ def _get_caption_languages(user_ids: list[str]) -> dict[str, str]:
     finally:
         db.close()
 
-def _get_spoken_language(user_id: str) -> str:
-    db = SessionLocal()
-    try:
-        row = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
-        return row.spoken_language if row else "en"
-    finally:
-        db.close()
-
 def _save_transcript_entry(room_code: str, user_id: str, speaker_name: str, text: str, lang: str) -> None:
     db = SessionLocal()
     try:

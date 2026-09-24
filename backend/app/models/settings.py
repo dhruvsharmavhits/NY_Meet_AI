@@ -30,6 +30,4 @@ class UserSettings(Base):
     mic_device_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     speaker_device_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
-    spoken_language: Mapped[str] = mapped_column(String(10), default="en", nullable=False)   # <-- ADD THIS
-
     user: Mapped["User"] = relationship(back_populates="settings")
