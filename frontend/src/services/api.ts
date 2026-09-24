@@ -252,8 +252,8 @@ export async function listDoctorRooms(): Promise<Meeting[]> {
   return data;
 }
 
-export async function regenerateRoomPasscode(roomCode: string): Promise<Meeting> {
-  const { data } = await api.post<Meeting>(`/admin/rooms/${roomCode}/passcode/regenerate`);
+export async function fetchRoomPasscode(roomCode: string): Promise<Meeting> {
+  const { data } = await api.get<Meeting>(`/admin/rooms/${roomCode}/passcode`);
   return data;
 }
 
@@ -326,13 +326,10 @@ export interface ThirdPartyApp {
   id: string;
   app_name: string;
   company_name: string;
+  api_key: string | null;
   api_key_prefix: string;
   status: string;
   created_at: string;
-}
-
-export interface ThirdPartyAppCreated extends ThirdPartyApp {
-  api_key: string;
 }
 
 export async function listThirdPartyApps(): Promise<ThirdPartyApp[]> {
@@ -340,15 +337,11 @@ export async function listThirdPartyApps(): Promise<ThirdPartyApp[]> {
   return data;
 }
 
-export async function createThirdPartyApp(appName: string, companyName: string): Promise<ThirdPartyAppCreated> {
-  const { data } = await api.post<ThirdPartyAppCreated>("/admin/third-party-apps", {
+export async function createThirdPartyApp(appName: string, companyName: string): Promise<ThirdPartyApp> {
+  const { data } = await api.post<ThirdPartyApp>("/admin/third-party-apps", {
     app_name: appName,
     company_name: companyName,
   });
   return data;
 }
 
-export async function regenerateThirdPartyAppKey(appId: string): Promise<ThirdPartyAppCreated> {
-  const { data } = await api.post<ThirdPartyAppCreated>(`/admin/third-party-apps/${appId}/regenerate-key`);
-  return data;
-}

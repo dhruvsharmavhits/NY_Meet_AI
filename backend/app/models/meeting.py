@@ -43,6 +43,7 @@ class Meeting(Base):
         String(36), ForeignKey("third_party_apps.id"), nullable=True, index=True
     )
     room_passcode_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    room_passcode: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

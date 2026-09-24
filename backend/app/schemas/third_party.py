@@ -12,15 +12,12 @@ class ThirdPartyAppResponse(BaseModel):
     id: str
     app_name: str
     company_name: str
+    api_key: str | None = None
     api_key_prefix: str
     status: str
     created_at: datetime
 
     model_config = {"from_attributes": True}
-
-
-class ThirdPartyAppCreatedResponse(ThirdPartyAppResponse):
-    api_key: str
 
 
 class CreatePatientRequest(BaseModel):

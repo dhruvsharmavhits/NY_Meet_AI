@@ -2,12 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  createThirdPartyApp,
-  listThirdPartyApps,
-  regenerateThirdPartyAppKey,
-  ThirdPartyApp,
-} from "@/services/api";
+import { createThirdPartyApp, listThirdPartyApps } from "@/services/api";
 import { ContentCopyIcon, LinguaMeetLogo } from "@/components/Icons";
 
 export default function ThirdPartyAppsPage() {
@@ -19,7 +14,6 @@ export default function ThirdPartyAppsPage() {
   const [companyName, setCompanyName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [revealedKey, setRevealedKey] = useState<{ forAppId: string; key: string } | null>(null);
 
   useEffect(() => {
     if (!localStorage.getItem("admin_token")) {
@@ -40,8 +34,7 @@ export default function ThirdPartyAppsPage() {
     setError(null);
     setSubmitting(true);
     try {
-      const created = await createThirdPartyApp(appName, companyName);
-      setRevealedKey({ forAppId: created.id, key: created.api_key });
+      await createThirdPartyApp(appName, companyName);
       setAppName("");
       setCompanyName("");
       queryClient.invalidateQueries({ queryKey: ["third-party-apps"] });
@@ -49,17 +42,6 @@ export default function ThirdPartyAppsPage() {
       setError("Could not create the app. Please try again.");
     } finally {
       setSubmitting(false);
-    }
-  }
-
-  async function handleRegenerate(app: ThirdPartyApp) {
-    setError(null);
-    try {
-      const regenerated = await regenerateThirdPartyAppKey(app.id);
-      setRevealedKey({ forAppId: app.id, key: regenerated.api_key });
-      queryClient.invalidateQueries({ queryKey: ["third-party-apps"] });
-    } catch {
-      setError("Could not regenerate the key. Please try again.");
     }
   }
 
@@ -133,30 +115,17 @@ export default function ThirdPartyAppsPage() {
           <div className="divide-y divide-black/5">
             {apps?.map((app) => (
               <div key={app.id} className="py-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-semibold text-[#1a1a2e]">{app.app_name}</p>
-                    <p className="text-xs text-[#94a3b8] font-medium">
-                      {app.company_name} · key {app.api_key_prefix}… · {app.status}
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => handleRegenerate(app)}
-                    className="rounded-xl px-4 py-2 text-xs font-semibold text-[#4285f4] hover:bg-black/5 transition-all duration-200"
-                  >
-                    Regenerate key
-                  </button>
+                <div>
+                  <p className="text-sm font-semibold text-[#1a1a2e]">{app.app_name}</p>
+                  <p className="text-xs text-[#94a3b8] font-medium">
+                    {app.company_name} · key {app.api_key_prefix}… · {app.status}
+                  </p>
                 </div>
-                {revealedKey?.forAppId === app.id && (
-                  <div className="mt-3 flex items-center justify-between gap-3 rounded-2xl bg-[#0f9d58]/8 px-4 py-3">
-                    <div>
-                      <p className="text-xs font-semibold text-[#0f9d58]">
-                        Copy this key now — it won't be shown again
-                      </p>
-                      <p className="mt-1 break-all font-mono text-xs text-[#1a1a2e]">{revealedKey.key}</p>
-                    </div>
+                {app.api_key && (
+                  <div className="mt-3 flex items-center justify-between gap-3 rounded-2xl bg-black/[0.03] px-4 py-3">
+                    <p className="break-all font-mono text-xs text-[#1a1a2e]">{app.api_key}</p>
                     <button
-                      onClick={() => copyKey(revealedKey.key)}
+                      onClick={() => copyKey(app.api_key as string)}
                       title="Copy API key"
                       className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-[#64748b] hover:bg-black/5 transition-all duration-200"
                     >

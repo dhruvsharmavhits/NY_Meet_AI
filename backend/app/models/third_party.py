@@ -14,6 +14,7 @@ class ThirdPartyApp(Base):
     app_name: Mapped[str] = mapped_column(String(255), nullable=False)
     company_name: Mapped[str] = mapped_column(String(255), nullable=False)
     api_key_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    api_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     api_key_prefix: Mapped[str] = mapped_column(String(20), unique=True, index=True, nullable=False)
     status: Mapped[str] = mapped_column(String(16), default="active", nullable=False)
 

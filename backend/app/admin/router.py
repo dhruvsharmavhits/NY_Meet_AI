@@ -28,7 +28,7 @@ from app.schemas.patient import (
     PatientLinkResponse,
     PatientLinkWithSessionResponse,
 )
-from app.schemas.third_party import CreateThirdPartyAppRequest, ThirdPartyAppCreatedResponse, ThirdPartyAppResponse
+from app.schemas.third_party import CreateThirdPartyAppRequest, ThirdPartyAppResponse
 from app.schemas.transcript import TranscriptEntryResponse
 from app.storage.s3_storage import get_presigned_url, list_final_recordings
 from app.third_party.auth import generate_api_key, generate_passcode
@@ -105,6 +105,7 @@ def create_room(
         status=MeetingStatus.ACTIVE,
         started_at=datetime.now(timezone.utc),
         room_passcode_hash=passcode_hash,
+        room_passcode=passcode,
     )
     db.add(room)
     db.commit()
@@ -113,18 +114,14 @@ def create_room(
     return room
 
 
-@router.post(
-    "/rooms/{room_code}/passcode/regenerate",
+@router.get(
+    "/rooms/{room_code}/passcode",
     response_model=MeetingResponse,
     dependencies=[Depends(require_admin)],
 )
-def regenerate_room_passcode(room_code: str, db: Session = Depends(get_db)) -> Meeting:
+def get_room_passcode(room_code: str, db: Session = Depends(get_db)) -> Meeting:
     room = _get_room_or_404(room_code, db)
-    passcode, passcode_hash = generate_passcode()
-    room.room_passcode_hash = passcode_hash
-    db.commit()
-    db.refresh(room)
-    room.passcode = passcode
+    room.passcode = room.room_passcode
     return room
 
 
@@ -282,22 +279,23 @@ def download_session_recording(session_id: str, filename: str, db: Session = Dep
 
 @router.post(
     "/third-party-apps",
-    response_model=ThirdPartyAppCreatedResponse,
+    response_model=ThirdPartyAppResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_admin)],
 )
-def create_third_party_app(payload: CreateThirdPartyAppRequest, db: Session = Depends(get_db)) -> ThirdPartyAppCreatedResponse:
+def create_third_party_app(payload: CreateThirdPartyAppRequest, db: Session = Depends(get_db)) -> ThirdPartyApp:
     api_key, prefix, api_key_hash = generate_api_key()
     app = ThirdPartyApp(
         app_name=payload.app_name,
         company_name=payload.company_name,
+        api_key=api_key,
         api_key_hash=api_key_hash,
         api_key_prefix=prefix,
     )
     db.add(app)
     db.commit()
     db.refresh(app)
-    return ThirdPartyAppCreatedResponse(**ThirdPartyAppResponse.model_validate(app).model_dump(), api_key=api_key)
+    return app
 
 
 @router.get(
@@ -307,20 +305,3 @@ def create_third_party_app(payload: CreateThirdPartyAppRequest, db: Session = De
 )
 def list_third_party_apps(db: Session = Depends(get_db)) -> list[ThirdPartyApp]:
     return db.query(ThirdPartyApp).order_by(ThirdPartyApp.created_at.desc()).all()
-
-
-@router.post(
-    "/third-party-apps/{app_id}/regenerate-key",
-    response_model=ThirdPartyAppCreatedResponse,
-    dependencies=[Depends(require_admin)],
-)
-def regenerate_third_party_app_key(app_id: str, db: Session = Depends(get_db)) -> ThirdPartyAppCreatedResponse:
-    app = db.get(ThirdPartyApp, app_id)
-    if app is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Third-party app not found")
-    api_key, prefix, api_key_hash = generate_api_key()
-    app.api_key_hash = api_key_hash
-    app.api_key_prefix = prefix
-    db.commit()
-    db.refresh(app)
-    return ThirdPartyAppCreatedResponse(**ThirdPartyAppResponse.model_validate(app).model_dump(), api_key=api_key)

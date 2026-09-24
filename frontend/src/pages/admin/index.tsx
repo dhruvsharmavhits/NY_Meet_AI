@@ -8,13 +8,13 @@ import {
   createDoctorRoom,
   createPatientLink,
   downloadRecording,
+  fetchRoomPasscode,
   fetchSessionTranscript,
   getQueue,
   listDoctorRooms,
   listPatientLinks,
   listRecordings,
   Meeting,
-  regenerateRoomPasscode,
 } from "@/services/api";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { NamePrompt } from "@/components/NamePrompt";
@@ -108,16 +108,19 @@ export default function AdminDashboardPage() {
     }
   }
 
-  async function handleRegeneratePasscode() {
+  async function handleViewPasscode() {
     if (!selectedRoom) return;
     setError(null);
     try {
-      const room = await regenerateRoomPasscode(selectedRoom.room_code);
-      queryClient.invalidateQueries({ queryKey: ["doctor-rooms"] });
+      const room = await fetchRoomPasscode(selectedRoom.room_code);
       if (room.passcode) setRevealedPasscode({ roomCode: room.room_code, passcode: room.passcode });
     } catch {
-      setError("Could not generate a passcode for this room");
+      setError("Could not fetch the passcode for this room");
     }
+  }
+
+  function copyPasscode(passcode: string) {
+    navigator.clipboard?.writeText(passcode).catch(() => {});
   }
 
   async function handleCreateLink(e: FormEvent) {
@@ -279,21 +282,30 @@ export default function AdminDashboardPage() {
                 <div>
                   <p className="text-xs font-semibold text-[#64748b] uppercase tracking-wider">Room passcode</p>
                   {revealedPasscode?.roomCode === selectedRoom.room_code ? (
-                    <p className="mt-1 font-mono text-sm font-semibold text-[#0f9d58]">
-                      {revealedPasscode.passcode} <span className="font-sans text-xs text-[#94a3b8]">(copy it now — shown once)</span>
-                    </p>
+                    <div className="mt-1 flex items-center gap-2">
+                      <p className="font-mono text-sm font-semibold text-[#0f9d58]">{revealedPasscode.passcode}</p>
+                      <button
+                        onClick={() => copyPasscode(revealedPasscode.passcode)}
+                        title="Copy passcode"
+                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[#64748b] hover:bg-black/5 transition-all duration-200"
+                      >
+                        <ContentCopyIcon size={14} />
+                      </button>
+                    </div>
                   ) : (
                     <p className="mt-1 text-sm text-[#94a3b8]">
-                      {selectedRoom.requires_passcode ? "Already set — regenerate to see a new one" : "Not set yet"}
+                      {selectedRoom.requires_passcode ? "Set at creation" : "Not set"}
                     </p>
                   )}
                 </div>
-                <button
-                  onClick={handleRegeneratePasscode}
-                  className="rounded-xl px-4 py-2 text-xs font-semibold text-[#4285f4] hover:bg-black/5 transition-all duration-200"
-                >
-                  {selectedRoom.requires_passcode ? "Regenerate" : "Generate passcode"}
-                </button>
+                {selectedRoom.requires_passcode && (
+                  <button
+                    onClick={handleViewPasscode}
+                    className="rounded-xl px-4 py-2 text-xs font-semibold text-[#4285f4] hover:bg-black/5 transition-all duration-200"
+                  >
+                    View & copy
+                  </button>
+                )}
               </div>
             </section>
 

@@ -54,7 +54,7 @@ def _get_room_or_404(app: ThirdPartyApp, room_code: str, db: Session) -> Meeting
     return room
 
 
-def _room_response(app: ThirdPartyApp, room: Meeting, db: Session, passcode: str | None = None) -> RoomResponse:
+def _room_response(app: ThirdPartyApp, room: Meeting, db: Session) -> RoomResponse:
     links = db.query(PatientLink).filter(PatientLink.room_id == room.id).all()
     doctors = db.query(MeetingDoctor).filter(MeetingDoctor.meeting_id == room.id).all()
     return RoomResponse(
@@ -62,7 +62,7 @@ def _room_response(app: ThirdPartyApp, room: Meeting, db: Session, passcode: str
         title=room.title,
         doctor_user_ids=[d.doctor_user_id for d in doctors],
         patient_link_codes=[link.code for link in links],
-        passcode=passcode,
+        passcode=room.room_passcode,
     )
 
 
@@ -169,6 +169,7 @@ def create_room(
         host_id=payload.doctor_user_ids[0] if payload.doctor_user_ids else None,
         third_party_app_id=app.id,
         room_passcode_hash=passcode_hash,
+        room_passcode=passcode,
         status=MeetingStatus.ACTIVE,
         started_at=datetime.now(timezone.utc),
     )
@@ -182,7 +183,7 @@ def create_room(
         db.add(MeetingDoctor(meeting_id=room.id, doctor_user_id=doctor_id))
     db.commit()
 
-    return _room_response(app, room, db, passcode=passcode)
+    return _room_response(app, room, db)
 
 
 @router.get("/rooms/{room_code}", response_model=RoomResponse)

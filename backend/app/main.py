@@ -47,6 +47,8 @@ def _migrate_schema() -> None:
         "ALTER TABLE meetings ADD COLUMN recording_status VARCHAR(16) DEFAULT 'none' NOT NULL",
         "ALTER TABLE meetings ADD COLUMN third_party_app_id VARCHAR(36)",
         "ALTER TABLE meetings ADD COLUMN room_passcode_hash VARCHAR(255)",
+        "ALTER TABLE meetings ADD COLUMN room_passcode VARCHAR(16)",
+        "ALTER TABLE third_party_apps ADD COLUMN api_key VARCHAR(64)",
         "ALTER TABLE meetings MODIFY COLUMN host_id VARCHAR(36) NULL",
         "ALTER TABLE patient_links ADD COLUMN patient_id VARCHAR(36)",
         "ALTER TABLE patient_links ADD COLUMN status VARCHAR(16) DEFAULT 'active' NOT NULL",
