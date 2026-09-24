@@ -303,7 +303,7 @@ export default function AdminDashboardPage() {
                     onClick={handleViewPasscode}
                     className="rounded-xl px-4 py-2 text-xs font-semibold text-[#4285f4] hover:bg-black/5 transition-all duration-200"
                   >
-                    View & copy
+                    View
                   </button>
                 )}
               </div>
