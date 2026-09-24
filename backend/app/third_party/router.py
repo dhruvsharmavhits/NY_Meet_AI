@@ -16,7 +16,7 @@ from app.schemas.third_party import (
 )
 from app.third_party.auth import generate_passcode, get_third_party_app
 
-router = APIRouter(prefix="/api/v1/third-party", tags=["third-party"])
+router = APIRouter(prefix="/v1/third-party", tags=["third-party"])
 
 
 def _patient_response(patient: Patient) -> PatientResponse:
