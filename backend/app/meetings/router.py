@@ -32,7 +32,7 @@ def _get_meeting_or_404(room_code: str, db: Session) -> Meeting:
     if meeting is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting not found")
     return meeting
-
+print("hello")
 
 def ensure_chime_meeting(meeting: Meeting, db: Session) -> dict:
     """Lazily create the Chime meeting backing this room on first join, so a
