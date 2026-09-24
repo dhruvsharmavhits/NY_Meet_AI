@@ -113,8 +113,11 @@ export async function updateMeetingTitle(roomCode: string, title: string): Promi
   return data;
 }
 
-export async function joinMeeting(roomCode: string, passcode?: string): Promise<Meeting> {
-  const { data } = await api.post<Meeting>(`/meetings/${roomCode}/join`, passcode ? { passcode } : {});
+export async function joinMeeting(roomCode: string, passcode?: string, accessToken?: string): Promise<Meeting> {
+  const { data } = await api.post<Meeting>(`/meetings/${roomCode}/join`, {
+    ...(passcode ? { passcode } : {}),
+    ...(accessToken ? { access_token: accessToken } : {}),
+  });
   return data;
 }
 

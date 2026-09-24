@@ -170,21 +170,37 @@ def join_meeting(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Meeting has ended")
 
     if meeting.room_passcode_hash is not None:
-        if not payload.passcode or not verify_secret(payload.passcode, meeting.room_passcode_hash):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid room passcode")
-        # third-party rooms have an explicit doctor roster to enforce; a plain
-        # admin-created private room has no such roster — the passcode itself
-        # is the only credential a provider is given, so it's sufficient alone.
-        if meeting.third_party_app_id is not None:
-            is_assigned_doctor = (
-                meeting.host_id == current_user.id
-                or db.query(MeetingDoctor)
-                .filter(MeetingDoctor.meeting_id == meeting.id, MeetingDoctor.doctor_user_id == current_user.id)
-                .first()
-                is not None
+        # a patient admitted through their personal link carries a single-use
+        # access token instead of the room passcode (which is only ever given
+        # to providers) — a valid token authorizes them the same way the
+        # websocket handshake does, without requiring the passcode too.
+        has_valid_patient_session = payload.access_token is not None and (
+            db.query(ConsultationSession)
+            .filter(
+                ConsultationSession.room_id == meeting.id,
+                ConsultationSession.access_token == payload.access_token,
+                ConsultationSession.status == ConsultationStatus.ACTIVE,
+                ConsultationSession.patient_user_id == current_user.id,
             )
-            if not is_assigned_doctor:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not assigned to this room")
+            .first()
+            is not None
+        )
+        if not has_valid_patient_session:
+            if not payload.passcode or not verify_secret(payload.passcode, meeting.room_passcode_hash):
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid room passcode")
+            # third-party rooms have an explicit doctor roster to enforce; a plain
+            # admin-created private room has no such roster — the passcode itself
+            # is the only credential a provider is given, so it's sufficient alone.
+            if meeting.third_party_app_id is not None:
+                is_assigned_doctor = (
+                    meeting.host_id == current_user.id
+                    or db.query(MeetingDoctor)
+                    .filter(MeetingDoctor.meeting_id == meeting.id, MeetingDoctor.doctor_user_id == current_user.id)
+                    .first()
+                    is not None
+                )
+                if not is_assigned_doctor:
+                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not assigned to this room")
 
     if meeting.status == MeetingStatus.SCHEDULED:
         meeting.status = MeetingStatus.ACTIVE

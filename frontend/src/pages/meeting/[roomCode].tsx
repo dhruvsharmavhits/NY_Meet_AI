@@ -229,7 +229,7 @@ export default function MeetingRoomPage() {
     }
     if (roomCode) {
       try {
-        const joined = await joinMeeting(roomCode, verifiedPasscode || undefined);
+        const joined = await joinMeeting(roomCode, verifiedPasscode || undefined, accessTokenParam);
         setChimeJoin({ chime_meeting: joined.chime_meeting ?? null, chime_attendee: joined.chime_attendee ?? null });
       } catch {
         setRecordingError("Could not connect to the meeting. Please try again.");

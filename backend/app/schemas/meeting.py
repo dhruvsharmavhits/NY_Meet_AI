@@ -16,6 +16,7 @@ class UpdateMeetingRequest(BaseModel):
 
 class JoinMeetingRequest(BaseModel):
     passcode: str | None = None
+    access_token: str | None = None
 
 
 class MeetingResponse(BaseModel):

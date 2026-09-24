@@ -2,7 +2,10 @@ import asyncio
 import time
 
 import socketio
+from botocore.exceptions import ClientError
+
 from app.admin.auth import is_valid_admin_token
+from app.aws import chime
 from app.config import settings
 from app.database import SessionLocal
 from app.models import (
@@ -46,6 +49,38 @@ def _get_user_by_id(user_id: str | None) -> User | None:
     db = SessionLocal()
     try:
         return db.get(User, user_id)
+    finally:
+        db.close()
+
+
+def _stop_recording_if_active(room_code: str) -> None:
+    """Mirrors the manual /recording/stop endpoint, but triggered when the
+    last participant leaves an empty room instead of by a host action."""
+    db = SessionLocal()
+    try:
+        meeting = db.query(Meeting).filter(Meeting.room_code == room_code).first()
+        if meeting is None or meeting.recording_status != "recording":
+            return
+
+        if meeting.media_pipeline_id is not None:
+            try:
+                chime.stop_composited_capture(meeting.media_pipeline_id)
+            except ClientError as exc:
+                if exc.response.get("Error", {}).get("Code") != "NotFoundException":
+                    print(f"[recording] auto-stop failed for meeting {meeting.id}: {exc}", flush=True)
+
+            if meeting.media_pipeline_arn and meeting.recording_s3_prefix:
+                try:
+                    chime.start_concatenation(
+                        meeting.media_pipeline_arn, settings.aws_recordings_bucket, f"{meeting.recording_s3_prefix}/final"
+                    )
+                except ClientError as exc:
+                    print(f"[recording] concatenation failed for meeting {meeting.id}: {exc}", flush=True)
+
+        meeting.media_pipeline_id = None
+        meeting.media_pipeline_arn = None
+        meeting.recording_status = "stopped"
+        db.commit()
     finally:
         db.close()
 
@@ -132,6 +167,7 @@ async def disconnect(sid):
             if not participants:
                 rooms.pop(room_code, None)
                 screen_sharers.pop(room_code, None)
+                await asyncio.to_thread(_stop_recording_if_active, room_code)
 
 
 @sio.on("join-room")
@@ -206,6 +242,10 @@ async def leave_room(sid, data):
             await sio.emit("screen-share-state", {"sid": sid, "sharing": False}, room=room_code)
         await sio.leave_room(sid, room_code)
         await sio.emit("peer-left", {"sid": sid}, room=room_code)
+        if not participants:
+            rooms.pop(room_code, None)
+            screen_sharers.pop(room_code, None)
+            await asyncio.to_thread(_stop_recording_if_active, room_code)
 
 
 @sio.on("chat-message")
