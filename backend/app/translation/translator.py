@@ -45,11 +45,18 @@ def translate(text: str, src_iso: str, tgt_iso: str) -> str | None:
     """Translate text between two ISO 639-1 codes. Returns None if either
     language isn't supported by the NLLB mapping, or unchanged text if
     src == tgt."""
-    if not text.strip():
+    stripped = text.strip()
+    if not stripped:
         return text
 
     if src_iso.lower() == tgt_iso.lower():
         return text
+
+    # NLLB reliably hallucinates on isolated short interjections (e.g. "hmm", "haan")
+    # since it has no sentence context to work with - better to show nothing than
+    # a confidently wrong translation.
+    if " " not in stripped and len(stripped) < 6:
+        return None
 
     src_flores = to_flores(src_iso)
     tgt_flores = to_flores(tgt_iso)
@@ -65,7 +72,13 @@ def translate(text: str, src_iso: str, tgt_iso: str) -> str | None:
         tokens = tokenizer.convert_ids_to_tokens(tokenizer.encode(masked_text))
     t1 = time.perf_counter()
 
-    results = _get_translator().translate_batch([tokens], target_prefix=[[tgt_flores]])
+    results = _get_translator().translate_batch(
+        [tokens],
+        target_prefix=[[tgt_flores]],
+        repetition_penalty=1.3,
+        no_repeat_ngram_size=3,
+        max_decoding_length=max(20, len(tokens) * 3),
+    )
     t2 = time.perf_counter()
 
     out_tokens = results[0].hypotheses[0][1:]

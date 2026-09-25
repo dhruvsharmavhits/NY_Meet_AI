@@ -1,6 +1,16 @@
 import type { Socket } from "socket.io-client";
 
 const TARGET_SAMPLE_RATE = 16000;
+// Below this RMS, treat the chunk as silence/background noise rather than
+// speech - feeding a continuous quiet/noisy stream with no pause into
+// Transcribe otherwise makes it loop on the same guessed token.
+const SILENCE_RMS_THRESHOLD = 0.006;
+
+function rms(buffer: Float32Array): number {
+  let sum = 0;
+  for (let i = 0; i < buffer.length; i++) sum += buffer[i] * buffer[i];
+  return Math.sqrt(sum / buffer.length);
+}
 
 function downsampleBuffer(buffer: Float32Array, inputRate: number, outputRate: number): Float32Array {
   if (outputRate === inputRate) return buffer;
@@ -98,6 +108,7 @@ export function startAudioCapture(stream: MediaStream, roomCode: string, socket:
         // feed silence into the transcription pipeline (which can otherwise
         // hallucinate captions from near-silence/background noise).
         if (!audioTrack.enabled) return;
+        if (rms(event.data) < SILENCE_RMS_THRESHOLD) return;
 
         const downsampled = downsampleBuffer(event.data, audioContext.sampleRate, TARGET_SAMPLE_RATE);
         const pcm16 = floatTo16BitPCM(downsampled);
