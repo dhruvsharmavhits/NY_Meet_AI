@@ -5,7 +5,7 @@ from app.database import get_db
 from app.meetings.router import create_chime_attendee, ensure_chime_meeting
 from app.models import ConsultationSession, ConsultationStatus, Meeting, PatientLink, User
 from app.schemas.patient import ConsultationSessionResponse, JoinPatientLinkResponse, RoomPublicResponse
-from app.users.dependencies import get_current_user
+from app.users.dependencies import get_current_user, get_current_user_optional
 
 router = APIRouter(prefix="/patient-links", tags=["patients"])
 
@@ -68,7 +68,9 @@ def _chime_join_info(session: ConsultationSession, current_user: User, db: Sessi
 
 
 @router.get("/{code}", response_model=RoomPublicResponse)
-def get_patient_link(code: str, db: Session = Depends(get_db)) -> RoomPublicResponse:
+def get_patient_link(
+    code: str, current_user: User | None = Depends(get_current_user_optional), db: Session = Depends(get_db)
+) -> RoomPublicResponse:
     link = _get_link_or_404(code, db)
     patient_name = link.label or "Patient"
     if link.status != "active":
@@ -76,7 +78,10 @@ def get_patient_link(code: str, db: Session = Depends(get_db)) -> RoomPublicResp
     if link.room_id is None:
         return RoomPublicResponse(patient_name=patient_name, expired=False, room_assigned=False)
     session = db.query(ConsultationSession).filter(ConsultationSession.patient_link_id == link.id).first()
-    expired = session is not None and session.status == ConsultationStatus.COMPLETED
+    claimed_by_other = (
+        session is not None and current_user is not None and session.patient_user_id != current_user.id
+    )
+    expired = claimed_by_other or (session is not None and session.status == ConsultationStatus.COMPLETED)
     return RoomPublicResponse(
         room_code=link.room.room_code, title=link.room.title, patient_name=patient_name, expired=expired
     )

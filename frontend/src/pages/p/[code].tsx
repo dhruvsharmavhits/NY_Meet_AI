@@ -28,7 +28,7 @@ export default function PatientLinkPage() {
   const { data: linkInfo, isError: linkInfoError } = useQuery({
     queryKey: ["patient-link-info", code],
     queryFn: () => getPatientLinkInfo(code as string),
-    enabled: !!code,
+    enabled: !!code && identityReady,
     retry: false,
   });
 
