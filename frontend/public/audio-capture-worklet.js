@@ -1,7 +1,7 @@
 class CaptureProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
-    this.bufferSize = 4096;
+    this.bufferSize = 1024;
     this.buffer = new Float32Array(this.bufferSize);
     this.offset = 0;
   }

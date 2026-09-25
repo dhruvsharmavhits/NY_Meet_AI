@@ -194,6 +194,9 @@ async def join_room(sid, data):
         "user_id": session["user_id"],
         "full_name": session["full_name"],
         "mic_on": bool(data.get("mic_on", True)),
+        # fetched once at join instead of per-caption, since it's set before
+        # join and doesn't change mid-call — keeps the caption hot path off the DB.
+        "caption_lang": await asyncio.to_thread(_get_caption_language, session["user_id"]),
     }
     await sio.enter_room(sid, room_code)
     print(f"[rtc] join-room sid={sid} room={room_code} existing_peers={[p['sid'] for p in existing]}", flush=True)
@@ -283,11 +286,11 @@ async def chat_message(sid, data):
     )
 
 
-def _get_caption_languages(user_ids: list[str]) -> dict[str, str]:
+def _get_caption_language(user_id: str) -> str:
     db = SessionLocal()
     try:
-        rows = db.query(UserSettings).filter(UserSettings.user_id.in_(user_ids)).all()
-        return {row.user_id: row.caption_language for row in rows}
+        row = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
+        return row.caption_language if row else "en"
     finally:
         db.close()
 
@@ -337,9 +340,7 @@ async def _handle_transcript_result(
     asyncio.create_task(asyncio.to_thread(_save_transcript_entry, room_code, user_id, full_name, text, language))
 
     participants = rooms.get(room_code, {})
-    user_ids = [p["user_id"] for p in participants.values()]
-    caption_langs = await asyncio.to_thread(_get_caption_languages, user_ids)
-    targets = dict.fromkeys(caption_langs.get(p["user_id"], "en") for p in participants.values())
+    targets = dict.fromkeys(p.get("caption_lang", "en") for p in participants.values())
     targets.pop(language, None)
 
     translate_start = time.perf_counter()
