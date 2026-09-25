@@ -57,7 +57,12 @@ class TranscribeSession:
             language_code=None,
             media_sample_rate_hz=16000,
             media_encoding="pcm",
-            identify_language=True,
+            # identify_language locks in one dominant language for the whole
+            # session from its first guess. identify_multiple_languages
+            # re-identifies per segment, so a speaker switching between
+            # Hindi and English mid-call is picked up on the next utterance
+            # instead of staying stuck on whatever was detected first.
+            identify_multiple_languages=True,
             language_options=list(LANGUAGE_CODES.values()),
         )
         handler = _ResultHandler(self._stream.output_stream, self._on_result, self._sid)
