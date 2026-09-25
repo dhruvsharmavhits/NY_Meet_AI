@@ -155,6 +155,7 @@ export function useMeetingRoom({
         try {
           await audioVideo.startAudioInput(audioDeviceId ?? AUDIO_CONSTRAINTS);
           audioInputStartedRef.current = true;
+          if (!initialMicOn) audioVideo.realtimeMuteLocalAudio();
         } catch (err) {
           console.error("Unable to start audio input", err);
         }
@@ -306,6 +307,7 @@ export function useMeetingRoom({
           room_code: activeRoomCode,
           access_token: accessToken,
           admin_token: typeof window !== "undefined" ? localStorage.getItem("admin_token") : null,
+          mic_on: micOnRef.current,
         });
       });
 
@@ -328,23 +330,27 @@ export function useMeetingRoom({
 
       socket.on(
         "existing-peers",
-        (data: { peers: { sid: string; user_id: string; full_name: string }[] }) => {
+        (data: { peers: { sid: string; user_id: string; full_name: string; mic_on: boolean }[] }) => {
           for (const peer of data.peers) {
             sidByUserIdRef.current[peer.user_id] = peer.sid;
             setParticipants((prev) => ({
               ...prev,
-              [peer.sid]: { sid: peer.sid, user_id: peer.user_id, full_name: peer.full_name, micOn: true, cameraOn: false, screenSharing: false },
+              [peer.sid]: { sid: peer.sid, user_id: peer.user_id, full_name: peer.full_name, micOn: peer.mic_on, cameraOn: false, screenSharing: false },
             }));
           }
         }
       );
 
-      socket.on("peer-joined", (peer: { sid: string; user_id: string; full_name: string }) => {
+      socket.on("peer-joined", (peer: { sid: string; user_id: string; full_name: string; mic_on: boolean }) => {
         sidByUserIdRef.current[peer.user_id] = peer.sid;
         setParticipants((prev) => ({
           ...prev,
-          [peer.sid]: { sid: peer.sid, user_id: peer.user_id, full_name: peer.full_name, micOn: true, cameraOn: false, screenSharing: false },
+          [peer.sid]: { sid: peer.sid, user_id: peer.user_id, full_name: peer.full_name, micOn: peer.mic_on, cameraOn: false, screenSharing: false },
         }));
+      });
+
+      socket.on("mic-state", (data: { sid: string; mic_on: boolean }) => {
+        updateParticipantBySid(data.sid, { micOn: data.mic_on });
       });
 
       socket.on("peer-left", (data: { sid: string }) => {
@@ -454,6 +460,7 @@ export function useMeetingRoom({
       if (sttAudioTrackRef.current) sttAudioTrackRef.current.enabled = false;
       micOnRef.current = false;
       setMicOn(false);
+      if (roomCode) getSocket().emit("mic-state", { room_code: roomCode, mic_on: false });
       return;
     }
 
@@ -474,7 +481,8 @@ export function useMeetingRoom({
     if (sttAudioTrackRef.current) sttAudioTrackRef.current.enabled = true;
     micOnRef.current = true;
     setMicOn(true);
-  }, []);
+    if (roomCode) getSocket().emit("mic-state", { room_code: roomCode, mic_on: true });
+  }, [roomCode]);
 
   const toggleCamera = useCallback(async () => {
     const audioVideo = audioVideoRef.current;

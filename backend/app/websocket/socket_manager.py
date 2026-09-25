@@ -186,21 +186,41 @@ async def join_room(sid, data):
     participants = rooms.setdefault(room_code, {})
 
     existing = [
-        {"sid": psid, "user_id": p["user_id"], "full_name": p["full_name"]}
+        {"sid": psid, "user_id": p["user_id"], "full_name": p["full_name"], "mic_on": p["mic_on"]}
         for psid, p in participants.items()
     ]
 
-    participants[sid] = {"user_id": session["user_id"], "full_name": session["full_name"]}
+    participants[sid] = {
+        "user_id": session["user_id"],
+        "full_name": session["full_name"],
+        "mic_on": bool(data.get("mic_on", True)),
+    }
     await sio.enter_room(sid, room_code)
     print(f"[rtc] join-room sid={sid} room={room_code} existing_peers={[p['sid'] for p in existing]}", flush=True)
 
     await sio.emit("existing-peers", {"peers": existing}, room=sid)
     await sio.emit(
         "peer-joined",
-        {"sid": sid, "user_id": session["user_id"], "full_name": session["full_name"]},
+        {
+            "sid": sid,
+            "user_id": session["user_id"],
+            "full_name": session["full_name"],
+            "mic_on": participants[sid]["mic_on"],
+        },
         room=room_code,
         skip_sid=sid,
     )
+
+
+@sio.on("mic-state")
+async def mic_state(sid, data):
+    room_code = data["room_code"]
+    participants = rooms.get(room_code, {})
+    if sid not in participants:
+        return
+    mic_on = bool(data.get("mic_on", True))
+    participants[sid]["mic_on"] = mic_on
+    await sio.emit("mic-state", {"sid": sid, "mic_on": mic_on}, room=room_code, skip_sid=sid)
 
 
 @sio.on("screen-share-claim")
